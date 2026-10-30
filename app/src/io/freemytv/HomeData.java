@@ -219,6 +219,12 @@ final class HomeData {
     volatile long sportsAt;
     private volatile boolean fetchingSports;
     private volatile long sportsFailedAt, sportsDue, resultsAt;
+    /** Sleeper teams (null until the first fetch; none when it isn't set up) and the FPL strip (null: none). */
+    volatile Fantasy.Team[] fantasy;
+    volatile Fantasy.Fpl fpl;
+    volatile long fantasyAt;
+    private volatile boolean fetchingFantasy;
+    private volatile long fantasyFailedAt;
     /** The city of the forecast in memory: another process (ScreensaverAlone) can see the city change under it. */
     private volatile String weatherFor = "";
 
@@ -436,6 +442,240 @@ final class HomeData {
             for (int k = 0; k < sides.length(); k++) if (team[1].equals(sides.getJSONObject(k).optString("id"))) return SportsFeed.game(e, team[1]);
         }
         return null;
+    }
+
+    /** The Fantasy row: only in a build with the owner's Sleeper username or FPL team. */
+    static boolean fantasyOn() {
+        return !Config.SLEEPER_USER.isEmpty() || Config.FPL_TEAM.matches("\\d+");
+    }
+
+    /**
+     * Sleeper's NFL leagues and the FPL strip, every 5 minutes while the home screen shows (it asks; the screensaver
+     * doesn't). Slow parts are kept: Sleeper's leagues and rosters for an hour, FPL's gameweeks (1.8 MB) for a day.
+     */
+    void refreshFantasy() {
+        long now = System.currentTimeMillis();
+        if (!fantasyOn() || fetchingFantasy || (now - fantasyAt <= Fantasy.EVERY && now >= fantasyAt) || failedRecently(fantasyFailedAt, now)) return;
+        fetchingFantasy = true;
+        io.execute(() -> {
+            try {
+                Fantasy.Team[] sl = Config.SLEEPER_USER.isEmpty() ? new Fantasy.Team[0] : sleeper(now);
+                Fantasy.Fpl f = Config.FPL_TEAM.matches("\\d+") ? fpl(now) : null;
+                fantasy = sl;
+                fpl = f;
+                fantasyAt = System.currentTimeMillis();
+                notifyListeners();
+            } catch (Exception e) {
+                fantasyFailedAt = System.currentTimeMillis();
+                AppLog.w("fantasy: " + e.getClass().getSimpleName() + (e instanceof IOException && e.getMessage() != null && e.getMessage().startsWith("HTTP") ? " " + e.getMessage() : ""));
+            } finally {
+                fetchingFantasy = false;
+            }
+        });
+    }
+
+    private static final String SLEEPER = "https://api.sleeper.app/v1/";
+    /** One Sleeper league as read once an hour: our roster and everyone's name and record. */
+    private static final class SleeperLeague {
+        String id, name = "";
+        int me = -1, week;
+        int[] roster, wins, losses, ties;
+        double[] points;
+        final java.util.Map<Integer, String> names = new java.util.HashMap<>();
+    }
+    private List<SleeperLeague> sleeperLeagues = new ArrayList<>();
+    private long sleeperStaticAt;
+    private final java.util.Map<String, double[]> lastWeek = new java.util.HashMap<>();
+
+    private Fantasy.Team[] sleeper(long now) throws Exception {
+        JSONObject state = new JSONObject(get(SLEEPER + "state/nfl"));
+        int week = state.optInt("week", 1);
+        String season = state.optString("league_season", state.optString("season"));
+        if (sleeperLeagues.isEmpty() || now - sleeperStaticAt > 3600_000L || now < sleeperStaticAt || sleeperWeek != week) {
+            String user = new JSONObject(get(SLEEPER + "user/" + URLEncoder.encode(Config.SLEEPER_USER, "UTF-8"))).getString("user_id");
+            JSONArray leagues = new JSONArray(get(SLEEPER + "user/" + user + "/leagues/nfl/" + season));
+            List<SleeperLeague> out = new ArrayList<>();
+            lastWeek.clear();
+            for (int i = 0; i < leagues.length(); i++) {
+                JSONObject l = leagues.getJSONObject(i);
+                SleeperLeague s = new SleeperLeague();
+                s.id = l.getString("league_id");
+                s.name = l.optString("name");
+                JSONArray rosters = new JSONArray(get(SLEEPER + "league/" + s.id + "/rosters"));
+                int n = rosters.length();
+                s.roster = new int[n];
+                s.wins = new int[n];
+                s.losses = new int[n];
+                s.ties = new int[n];
+                s.points = new double[n];
+                java.util.Map<String, Integer> owner = new java.util.HashMap<>();
+                for (int j = 0; j < n; j++) {
+                    JSONObject r = rosters.getJSONObject(j), st = r.getJSONObject("settings");
+                    s.roster[j] = r.getInt("roster_id");
+                    s.wins[j] = st.optInt("wins");
+                    s.losses[j] = st.optInt("losses");
+                    s.ties[j] = st.optInt("ties");
+                    s.points[j] = st.optInt("fpts") + st.optInt("fpts_decimal") / 100.0;
+                    owner.put(r.optString("owner_id"), j);
+                    if (user.equals(r.optString("owner_id"))) s.me = j;
+                }
+                JSONArray users = new JSONArray(get(SLEEPER + "league/" + s.id + "/users"));
+                for (int j = 0; j < users.length(); j++) {
+                    JSONObject u = users.getJSONObject(j);
+                    Integer at = owner.get(u.optString("user_id"));
+                    if (at == null) continue;
+                    JSONObject meta = u.optJSONObject("metadata");
+                    String team = meta == null ? "" : meta.optString("team_name").trim();
+                    s.names.put(s.roster[at], team.isEmpty() ? u.optString("display_name") : team);
+                }
+                if (s.me >= 0) {
+                    s.week = week;
+                    if (week > 1) lastWeek.put(s.id, matchup(s, week - 1));
+                    out.add(s);
+                }
+            }
+            sleeperLeagues = out;
+            sleeperStaticAt = now;
+            sleeperWeek = week;
+        }
+        List<Fantasy.Team> teams = new ArrayList<>();
+        for (SleeperLeague s : sleeperLeagues) {
+            Fantasy.Team t = new Fantasy.Team();
+            t.league = s.name;
+            t.week = week;
+            t.size = s.roster.length;
+            t.wins = s.wins[s.me];
+            t.ties = s.ties[s.me];
+            t.losses = s.losses[s.me];
+            t.name = s.names.containsKey(s.roster[s.me]) ? s.names.get(s.roster[s.me]) : "";
+            t.place = Fantasy.place(s.me, s.wins, s.ties, s.points);
+            double[] now8 = matchup(s, week);
+            t.mine = now8[0];
+            t.theirs = now8[1];
+            t.hasOpp = now8[2] > 0;
+            t.opp = t.hasOpp ? s.names.get((int) now8[2]) : "";
+            if (t.opp == null) t.opp = "";
+            double[] last = lastWeek.get(s.id);
+            if (last != null && last[2] > 0) {
+                t.lastMine = last[0];
+                t.lastTheirs = last[1];
+                t.hasLast = true;
+            }
+            teams.add(t);
+        }
+        return teams.toArray(new Fantasy.Team[0]);
+    }
+
+    private int sleeperWeek;
+
+    /** Our points, the opponent's and the opponent's roster id (0: none) in `week`. */
+    private double[] matchup(SleeperLeague s, int week) throws Exception {
+        JSONArray rows = new JSONArray(get(SLEEPER + "league/" + s.id + "/matchups/" + week));
+        int mineId = s.roster[s.me], group = -1;
+        double mine = 0;
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject r = rows.getJSONObject(i);
+            if (r.getInt("roster_id") == mineId) {
+                mine = r.optDouble("points", 0);
+                group = r.optInt("matchup_id", -1);
+            }
+        }
+        double theirs = 0, opp = 0;
+        for (int i = 0; i < rows.length() && group > 0; i++) {
+            JSONObject r = rows.getJSONObject(i);
+            if (r.getInt("roster_id") != mineId && r.optInt("matchup_id", -2) == group) {
+                theirs = r.optDouble("points", 0);
+                opp = r.getInt("roster_id");
+            }
+        }
+        return new double[] {mine, theirs, opp};
+    }
+
+    private static final String FPL = "https://fantasy.premierleague.com/api/";
+    private long fplDailyAt;
+    private int fplCurrent, fplNext;
+    private boolean fplFinished;
+    private long fplDeadlineCurrent, fplDeadlineNext;
+    private long fplStart, fplEnd;
+    private int fplFixturesFor;
+
+    private Fantasy.Fpl fpl(long now) throws Exception {
+        if (fplDailyAt == 0 || now - fplDailyAt > 24 * 3600_000L || now < fplDailyAt) {
+            // Only the gameweeks out of 1.8 MB: found by their bracket, so the players aren't parsed.
+            String all = get(FPL + "bootstrap-static/");
+            JSONArray events = new JSONArray(array(all, "\"events\":"));
+            fplCurrent = fplNext = 0;
+            for (int i = 0; i < events.length(); i++) {
+                JSONObject e = events.getJSONObject(i);
+                if (e.optBoolean("is_current")) {
+                    fplCurrent = e.getInt("id");
+                    fplFinished = e.optBoolean("finished");
+                    fplDeadlineCurrent = Sports.time(e.optString("deadline_time"));
+                }
+                if (e.optBoolean("is_next")) {
+                    fplNext = e.getInt("id");
+                    fplDeadlineNext = Sports.time(e.optString("deadline_time"));
+                }
+            }
+            fplDailyAt = now;
+            fplFixturesFor = 0;
+        }
+        JSONObject entry = new JSONObject(get(FPL + "entry/" + Config.FPL_TEAM + "/"));
+        Fantasy.Fpl f = new Fantasy.Fpl();
+        f.name = entry.optString("name");
+        f.gw = entry.optInt("current_event", fplCurrent);
+        f.points = entry.optInt("summary_event_points");
+        f.live = fplCurrent > 0 && !fplFinished;
+        f.nextGw = f.live ? f.gw : fplNext;
+        f.deadline = f.live ? 0 : fplDeadlineNext;
+        JSONObject leagues = entry.optJSONObject("leagues");
+        JSONArray classic = leagues == null ? null : leagues.optJSONArray("classic");
+        for (int i = 0; classic != null && i < classic.length(); i++) {
+            JSONObject l = classic.getJSONObject(i);
+            if (String.valueOf(l.optInt("id")).equals(Config.FPL_LEAGUE)) {
+                f.league = l.optString("name");
+                f.rank = l.optInt("entry_rank");
+                f.lastRank = l.optInt("entry_last_rank");
+            }
+        }
+        if (f.nextGw > 0 && fplFixturesFor != f.nextGw) {
+            JSONArray fixtures = new JSONArray(get(FPL + "fixtures/?event=" + f.nextGw));
+            long first = 0, last = 0;
+            for (int i = 0; i < fixtures.length(); i++) {
+                long at = Sports.time(fixtures.getJSONObject(i).optString("kickoff_time"));
+                if (at > 0 && (first == 0 || at < first)) first = at;
+                if (at > last) last = at;
+            }
+            fplStart = first;
+            fplEnd = last;
+            fplFixturesFor = f.nextGw;
+        }
+        f.start = f.nextGw > 0 ? fplStart : 0;
+        f.end = f.nextGw > 0 ? fplEnd : 0;
+        return f;
+    }
+
+    /** The JSON array that follows `key` in `json`, as text: found by its brackets (strings can hold them). */
+    static String array(String json, String key) throws IOException {
+        int at = json.indexOf(key);
+        int open = at < 0 ? -1 : json.indexOf('[', at);
+        if (open < 0) throw new IOException("no " + key);
+        int depth = 0;
+        boolean inString = false;
+        for (int i = open; i < json.length(); i++) {
+            char ch = json.charAt(i);
+            if (inString) {
+                if (ch == '\\') i++;
+                else if (ch == '"') inString = false;
+            } else if (ch == '"') {
+                inString = true;
+            } else if (ch == '[') {
+                depth++;
+            } else if (ch == ']' && --depth == 0) {
+                return json.substring(open, i + 1);
+            }
+        }
+        throw new IOException("cut " + key);
     }
 
     /** Environment Canada's AQHI and alerts: only for a place in Canada (its alerts' box finds nothing elsewhere). */

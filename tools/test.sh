@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks the app's logic that has no Android in it (app/src/io/freemytv/Rules.java, Transit.java, and Sports.java) on this computer, with only a JDK:
+# Checks the app's logic that has no Android in it (app/src/io/freemytv/Rules.java, Transit.java, Sports.java and Fantasy.java) on this computer, with only a JDK:
 #
 #   tools/test.sh
 #
@@ -16,7 +16,7 @@ mkdir -p out/test
 SEP=:
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) SEP=";";; esac   # Windows Java wants ; between classpath entries
 JSON="$(ls tools/lib/json-*.jar 2>/dev/null | head -1 || true)"
-SRC="app/src/io/freemytv/Rules.java app/src/io/freemytv/Transit.java app/src/io/freemytv/Sports.java"
+SRC="app/src/io/freemytv/Rules.java app/src/io/freemytv/Transit.java app/src/io/freemytv/Sports.java app/src/io/freemytv/Fantasy.java"
 TESTS="$(ls app/test/io/freemytv/*Test.java | grep -v SportsFeedTest || true)"
 if [ -n "$JSON" ]; then
   SRC="$SRC app/src/io/freemytv/SportsFeed.java"

@@ -179,8 +179,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     // Sports (808 TV): Spurs, the Whitecaps and F1. Cards in the middle of the main screen in the day, or whenever a game
     // is on (the bus timelines then give way to the bus line), and a Sports row of its own under the buses.
-    private static final int Z_SPORTS = 11;
-    private static final float SPORT_TOP = 470, SPORT_H = 240, SPORT_GAP = 24, SPORT_ROW = 380, SPORT_ROW_H = 290;
+    private static final int Z_SPORTS = 11, Z_FANTASY = 12;
+    private static final int[] ROW_ZONES = {Z_BUSES, Z_SPORTS, Z_FANTASY};
+    private static final float SPORT_TOP = 470, SPORT_H = 240, SPORT_GAP = 24, SPORT_ROW = 380, SPORT_ROW_H = 290, FANTASY_ROW = 380;
     private static final int LIVE_RED = 0xFFE5484D, SPORT_CARD = 0xB80E131D, SPORT_DIM = 0xFFC9D2DF;
     private static final int FORM_W = 0xFF2E7D4F, FORM_D = 0xFF4A5466, FORM_L = 0xFFA23B3E, CREST_OTHER = 0xFF3A4660;
 
@@ -197,7 +198,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     private final SportCard[] sportCards = {new SportCard(), new SportCard(), new SportCard()};
     private int sportCount;
-    private boolean sportLive, sportFocused;
+    private boolean sportLive, sportFocused, fantasyFocused;
     private long sportMinute = -1;
     private String sportTitle = "", sportNote = "", sportLiveWord = "", sportQuiet = "";
     private Paint sportName, sportSub, sportBig, sportScore, sportCrest, sportPill, sportLine;
@@ -687,6 +688,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             if (BOARD) {
                 data.refreshBuses();
                 data.refreshSports();
+                data.refreshFantasy();
             }
             recs.refreshIfStale();
             checkNotices();
@@ -797,6 +799,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (BOARD) {
             data.refreshBuses();
             data.refreshSports();
+            data.refreshFantasy();
         }
         recs.refreshIfStale();
         Photos.importInbox(getContext(), ownReady);   // photos a computer just sent
@@ -915,6 +918,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         layoutStatus();
         updateBuses(true);
         updateSports(true);
+        updateFantasy(true);
         heroDirty = statusDirty = drawerDirty = true;
         platter.invalidate();
     }
@@ -944,7 +948,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         measure(platter, width, Math.round(320 * kk));
         measure(tiles, width, Math.round(270 * kk));
         // On the board it also holds the picks row and the weather card under it (drawerScroll brings them up).
-        measure(drawerLayer, width, Math.round((BOARD ? 1200 + BUS_ROW + SPORT_ROW : 600) * kk));
+        measure(drawerLayer, width, Math.round((BOARD ? 1200 + BUS_ROW + SPORT_ROW + FANTASY_ROW : 600) * kk));
         measure(sheetLayer, width, height);
         measure(menuLayer, width, height);
         measure(toastLayer, width, Math.round(220 * kk));   // full width: a toast may sit right of a long title
@@ -1303,6 +1307,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         updateBuses(false);
         updateSports(false);
+        updateFantasy(false);
         return true;
     }
 
@@ -2404,7 +2409,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         dayLow.setColor(tone(L_DIM, 0xADFFFFFF));
         pricePaint.setColor(drawerInk(0.95f));
         // With the buses or sports in focus, the rows around them fade back (they have no ring: the header shows it).
-        boolean rowFocus = busFocused || sportFocused;
+        boolean rowFocus = busFocused || sportFocused || fantasyFocused;
         float rowsTop = BUS_ROW_TITLE - 48;
         int dim = dim(c, rowFocus, 0, rowsTop);
         float titleBase = (BOARD ? ROW_TITLE - 8 : ROW_TITLE) * k;
@@ -2416,13 +2421,18 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (top >= 0) drawDrawerTile(c, top);
         if (dim >= 0) c.restoreToCount(dim);
         if (busRow() > 0) {
-            dim = dim(c, sportFocused, rowsTop, rowsTop + busRow());
+            dim = dim(c, rowFocus && !busFocused, rowsTop, rowsTop + busRow());
             drawBusRow(c);
             if (dim >= 0) c.restoreToCount(dim);
         }
         if (sportRow() > 0) {
-            dim = dim(c, busFocused, rowsTop + busRow(), rowsTop + rows());
+            dim = dim(c, rowFocus && !sportFocused, rowsTop + busRow(), rowsTop + busRow() + sportRow());
             drawSportsRow(c);
+            if (dim >= 0) c.restoreToCount(dim);
+        }
+        if (fantasyRow() > 0) {
+            dim = dim(c, rowFocus && !fantasyFocused, rowsTop + busRow() + sportRow(), rowsTop + rows());
+            drawFantasyRow(c);
             if (dim >= 0) c.restoreToCount(dim);
         }
         dim = dim(c, rowFocus, rowsTop + rows(), 2600);
@@ -2666,10 +2676,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         // The board's picks are in the drawer: on them, it scrolls up to show the row.
         float all = PICKS_SCROLL + rows();
         float down = !BOARD || !drawerOpen ? 0 : zone == Z_CARDS ? 1 : zone == Z_BUSES ? BUS_SCROLL / all
-                : zone == Z_SPORTS ? (BUS_SCROLL + busRow()) / all : 0;
-        if (zone == Z_BUSES != busFocused || zone == Z_SPORTS != sportFocused) {
+                : zone == Z_SPORTS ? (BUS_SCROLL + busRow()) / all : zone == Z_FANTASY ? (BUS_SCROLL + busRow() + sportRow()) / all : 0;
+        if (zone == Z_BUSES != busFocused || zone == Z_SPORTS != sportFocused || zone == Z_FANTASY != fantasyFocused) {
             busFocused = zone == Z_BUSES;
             sportFocused = zone == Z_SPORTS;
+            fantasyFocused = zone == Z_FANTASY;
             drawerDirty = true;
         }
         if (drawerScroll.target != down) motionDirty = true;
@@ -3343,7 +3354,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void back() {
         if (sheetOpen) {
             closeSheet();
-        } else if (zone == Z_DRAWER || zone == WIDGETS || zone == Z_BUSES || zone == Z_SPORTS || BOARD && zone == Z_CARDS && drawerOpen) {
+        } else if (zone == Z_DRAWER || zone == WIDGETS || isRowZone(zone) || BOARD && zone == Z_CARDS && drawerOpen) {
             closeDrawer();
             retarget(false);
         } else if (zone != Z_SHELF) {
@@ -3366,10 +3377,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 int next = Math.max(0, Math.min(cards.size() - 1, cardIndex + dx));
                 if (next == cardIndex) return;
                 cardIndex = next;
-            } else if (dy < 0 && sportRow() > 0) {
-                zone = Z_SPORTS;
-            } else if (dy < 0 && busRow() > 0) {
-                zone = Z_BUSES;
+            } else if (dy < 0 && nextRow(Z_CARDS, -1) >= 0) {
+                zone = nextRow(Z_CARDS, -1);
             } else if (dy < 0) {
                 zone = Z_DRAWER;
                 drawerIndex = nearest(drawerRects, cardRects[Math.min(cardIndex, cardRects.length - 1)].centerX());
@@ -3380,13 +3389,16 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             click.move();
             return;
         }
-        if (BOARD && (zone == Z_BUSES || zone == Z_SPORTS)) {
+        if (BOARD && isRowZone(zone)) {
             // Rows that are only read: Up and Down go to the row above and below; sideways does nothing.
-            if (dy < 0) {
-                zone = zone == Z_SPORTS && busRow() > 0 ? Z_BUSES : Z_DRAWER;
-            } else if (dy > 0 && zone == Z_BUSES && sportRow() > 0) {
-                zone = Z_SPORTS;
-            } else if (dy > 0 && picksRow() && !cards.isEmpty()) {
+            int r = dy == 0 ? -1 : nextRow(zone, dy);
+            if (dy == 0) {
+                return;
+            } else if (dy < 0) {
+                zone = r >= 0 ? r : Z_DRAWER;
+            } else if (r >= 0) {
+                zone = r;
+            } else if (picksRow() && !cards.isEmpty()) {
                 zone = Z_CARDS;
                 cardIndex = 0;
             } else {
@@ -3463,10 +3475,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     drawerIndex = next;
                 } else if (dy < 0) {
                     closeDrawer();
-                } else if (busRow() > 0) {
-                    zone = Z_BUSES;
-                } else if (sportRow() > 0) {
-                    zone = Z_SPORTS;
+                } else if (nextRow(Z_DRAWER, 1) >= 0) {
+                    zone = nextRow(Z_DRAWER, 1);
                 } else if (picksRow() && !cards.isEmpty()) {
                     zone = Z_CARDS;
                     cardIndex = nearest(cardRects, cards.size(), drawerRects[drawerIndex].centerX());
@@ -3529,7 +3539,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         HomeApps.Item it;
         RectF r;
         if (!sheetOpen && zone == WIDGETS) return;   // a widget is only read
-        if (!sheetOpen && (zone == Z_BUSES || zone == Z_SPORTS)) return;   // the buses and sports are only read
+        if (!sheetOpen && isRowZone(zone)) return;   // the rows of buses, sports and fantasy are only read
         if (sheetOpen) {
             if (others.isEmpty()) return;
             it = others.get(gridIndex);
@@ -5072,7 +5082,24 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** The rows between the TV sources and the picks. */
     private float rows() {
-        return busRow() + sportRow();
+        return busRow() + sportRow() + fantasyRow();
+    }
+
+    private static boolean isRowZone(int z) {
+        return z == Z_BUSES || z == Z_SPORTS || z == Z_FANTASY;
+    }
+
+    private boolean rowShows(int z) {
+        return z == Z_BUSES ? busRow() > 0 : z == Z_SPORTS ? sportRow() > 0 : fantasyRow() > 0;
+    }
+
+    /** The row above (dir < 0) or below that shows, from a row, the sources (Z_DRAWER) or the picks (Z_CARDS); -1: none. */
+    private int nextRow(int from, int dir) {
+        int i = from == Z_DRAWER ? -1 : from == Z_CARDS ? ROW_ZONES.length : 0;
+        for (int j = 0; from != Z_DRAWER && from != Z_CARDS && j < ROW_ZONES.length; j++) if (ROW_ZONES[j] == from) i = j;
+        int step = dir < 0 ? -1 : 1;
+        for (i += step; i >= 0 && i < ROW_ZONES.length; i += step) if (rowShows(ROW_ZONES[i])) return ROW_ZONES[i];
+        return -1;
     }
 
     /** The main screen's cards: in the day, and in the morning and evening while a game is on (not in quiet hours). */
@@ -5242,6 +5269,148 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (d == -1) return Ui.trf("Yesterday {time}", "time", time);
         String day = Ui.datePattern(d > 1 && d < 7 ? "format|EEE" : "format|MMM d").format(at);
         return Ui.trf("{day} {time}", "day", day, "time", time);
+    }
+
+    // MARK: - Fantasy
+
+    /** One fantasy card as drawn: a Sleeper team (this week's game) or the FPL strip. */
+    private static final class FanCard {
+        String title = "", sub = "", record = "", vs = "", note = "", note2 = "", mine = "", theirs = "", arrow = "", pts = "", rank = "", rankLabel = "";
+        boolean sleeper, started, soon;
+        int arrowColour;
+        float share;   // our part of the two scores, for the bar
+    }
+
+    private final FanCard[] fanCards = {new FanCard(), new FanCard(), new FanCard()};
+    private int fanCount;
+    private long fanMinute = -1;
+    private String fantasyTitle = "", fantasyNote = "";
+
+    /** Rows for fantasy once Sleeper or FPL has answered with something to show. */
+    private float fantasyRow() {
+        return BOARD && fanCount > 0 ? FANTASY_ROW : 0;
+    }
+
+    private void updateFantasy(boolean force) {
+        Fantasy.Team[] teams = data.fantasy;
+        Fantasy.Fpl fpl = data.fpl;
+        if (!BOARD || sportName == null || teams == null && fpl == null) return;
+        long now = System.currentTimeMillis(), minute = now / 60_000;
+        if (!force && minute == fanMinute) return;
+        boolean first = fanMinute < 0;
+        fanMinute = minute;
+        float w = (CONTENT_R - MARGIN - 2 * SPORT_GAP) / 3 * k, text = w - 112 * k;
+        fanCount = 0;
+        for (int i = 0; teams != null && i < teams.length && fanCount < 2; i++) {
+            Fantasy.Team t = teams[i];
+            FanCard c = fanCards[fanCount++];
+            c.sleeper = true;
+            c.title = fit(t.name, sportName, text);
+            c.sub = fit(t.league, sportSub, text);
+            String record = t.ties > 0 ? t.wins + "–" + t.losses + "–" + t.ties : t.wins + "–" + t.losses;
+            c.record = Ui.trf("{record} · {place} of {size}", "record", record, "place", Fantasy.ordinal(t.place), "size", t.size);
+            c.started = Fantasy.started(t);
+            c.vs = t.hasOpp ? fit(Ui.trf("vs {team}", "team", t.opp), c.started ? sportSub : sportBig, w - 58 * k) : "";
+            c.mine = score(t.mine);
+            c.theirs = "– " + score(t.theirs);
+            c.share = t.mine + t.theirs > 0 ? (float) (t.mine / (t.mine + t.theirs)) : 0.5f;
+            c.arrow = t.mine > t.theirs ? "▲" : t.mine < t.theirs ? "▼" : "=";
+            c.arrowColour = t.mine > t.theirs ? 0xFF7EE2A8 : t.mine < t.theirs ? 0xFFFF9A92 : WHITE;
+            c.note = c.started ? "" : Ui.trf("Week {n} · not started", "n", t.week);
+            c.note2 = !t.hasLast || c.started ? "" : Ui.trf("Last week: {result} {score}", "result", String.valueOf(Fantasy.lastResult(t)),
+                    "score", score(t.lastMine) + "–" + score(t.lastTheirs));
+        }
+        if (fpl != null) {
+            FanCard c = fanCards[fanCount++];
+            c.sleeper = false;
+            c.title = fit(fpl.name, sportName, text);
+            c.sub = Ui.trf(fpl.live ? "GW{n} · live" : "GW{n} · final", "n", fpl.gw);
+            c.pts = String.valueOf(fpl.points);
+            c.rankLabel = fit(fpl.league, sportSub, w / 2);
+            // While a gameweek runs, the league's rank keeps last week's value (it moves after the last game).
+            int rank = fpl.live ? fpl.lastRank : fpl.rank, move = fpl.live ? Fantasy.NONE : Fantasy.arrow(fpl.rank, fpl.lastRank);
+            c.rank = rank > 0 ? Fantasy.ordinal(rank) : "";
+            c.arrow = move == Fantasy.UP ? "▲" : move == Fantasy.DOWN ? "▼" : move == Fantasy.SAME ? "=" : "";
+            c.arrowColour = move == Fantasy.UP ? 0xFF7EE2A8 : move == Fantasy.DOWN ? 0xFFFF9A92 : WHITE;
+            c.note = c.note2 = "";
+            c.soon = false;
+            for (long[] t : Fantasy.times(fpl, now)) {
+                if (t[1] == 1) {
+                    c.note = Ui.trf("Ends {when}", "when", when(t[0], now));
+                    c.note2 = Ui.trf("Rank updates after GW{n}", "n", fpl.gw);
+                } else if (t[1] == 0) {
+                    c.note = Ui.trf("GW{n} starts {when}", "n", fpl.nextGw, "when", when(t[0], now));
+                } else {
+                    c.note2 = Ui.trf("Deadline {when}", "when", when(t[0], now));
+                    c.soon = Fantasy.deadlineSoon(t[0], now);
+                }
+            }
+        }
+        fantasyTitle = Ui.tr("Fantasy");
+        fantasyNote = Ui.trf("Updated {time}", "time", Ui.clock(data.fantasyAt));
+        if (first) layoutDrawer();   // the first answer: the rows below make room
+        drawerDirty = true;
+    }
+
+    private static String score(double points) {
+        return String.format(java.util.Locale.US, "%.1f", points);
+    }
+
+    /** One press down, under Sports: your two Sleeper games this week and the FPL strip. */
+    private void drawFantasyRow(Canvas c) {
+        float left = MARGIN * k, title = (BUS_ROW_TITLE + busRow() + sportRow()) * k, top = (BUS_ROW_TOP + busRow() + sportRow()) * k;
+        drawRowTitle(c, fantasyTitle, left, title, fantasyFocused);
+        c.drawText(fantasyNote, left + (BUS_BAR_X + BUS_BAR_W) * k - busSmall.measureText(fantasyNote), title, busSmall);
+        float w = (CONTENT_R - MARGIN - 2 * SPORT_GAP) / 3 * k, h = SPORT_ROW_H * k;
+        for (int i = 0; i < fanCount; i++) {
+            FanCard s = fanCards[i];
+            float x = left + i * (w + SPORT_GAP * k), l = x + 30 * k, r = x + w - 28 * k;
+            fill.setShader(null);
+            fill.setColor(SPORT_CARD);
+            c.drawRect(x, top, x + w, top + h, fill);
+            fill.setColor(s.sleeper ? (s.started ? LIVE_RED : 0xFF6D86AE) : 0xFF00FF87);
+            c.drawRect(x, top, x + 6 * k, top + h, fill);
+            if (s.sleeper) drawCrest(c, "NFL", CREST_OTHER, WHITE, l, top + 24 * k);
+            else drawCrest(c, "FPL", 0xFF38003C, 0xFF00FF87, l, top + 24 * k);
+            c.drawText(s.title, l + 84 * k, top + 52 * k, sportName);
+            c.drawText(s.sub, l + 84 * k, top + 84 * k, sportSub);
+            if (!s.sleeper) {
+                c.drawText(s.pts, l, top + 166 * k, sportBig);
+                c.drawText(Ui.tr("points"), l, top + 196 * k, sportSub);
+                float rx = l + 190 * k;
+                c.drawText(s.rank, rx, top + 166 * k, sportBig);
+                if (!s.arrow.isEmpty()) {
+                    sportName.setColor(s.arrowColour);
+                    c.drawText(s.arrow, rx + sportBig.measureText(s.rank) + 12 * k, top + 166 * k, sportName);
+                    sportName.setColor(WHITE);
+                }
+                c.drawText(s.rankLabel, rx, top + 196 * k, sportSub);
+                c.drawText(s.note, l, top + 244 * k, sportLine);
+                sportLine.setColor(s.soon ? BUS_AMBER : SPORT_DIM);
+                c.drawText(s.note2, l, top + 276 * k, s.soon ? sportLine : sportSub);
+                sportLine.setColor(WHITE);
+                continue;
+            }
+            c.drawText(s.record, l, top + 138 * k, sportLine);
+            if (s.started) {
+                c.drawText(s.mine, l, top + 200 * k, sportBig);
+                float tx = l + sportBig.measureText(s.mine) + 14 * k;
+                c.drawText(s.theirs, tx, top + 200 * k, sportName);
+                sportName.setColor(s.arrowColour);
+                c.drawText(s.arrow, tx + sportName.measureText(s.theirs) + 14 * k, top + 200 * k, sportName);
+                sportName.setColor(WHITE);
+                float split = (r - l) * s.share;
+                fill.setColor(0xFFF2F5FA);
+                c.drawRect(l, top + 216 * k, l + split - 1.5f * k, top + 226 * k, fill);
+                fill.setColor(0xFF3A4660);
+                c.drawRect(l + split + 1.5f * k, top + 216 * k, r, top + 226 * k, fill);
+                c.drawText(s.vs, l, top + 262 * k, sportSub);
+            } else {
+                c.drawText(s.vs, l, top + 206 * k, sportBig);
+                c.drawText(s.note, l, top + 246 * k, sportSub);
+                c.drawText(s.note2, l, top + 276 * k, sportSub);
+            }
+        }
     }
 
     /** The main screen's middle: up to three cards across. */

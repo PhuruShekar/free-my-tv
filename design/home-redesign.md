@@ -449,6 +449,23 @@ look once this step is built and before buses (step 5) and sports (step 6) fill 
   after kickoff) and a game just finished joins the results at once; polling every minute stops for a start time that
   passed more than 3 hours ago; ESPN's JSON is read by `SportsFeed` and tested against saved feeds (`app/test/feeds`,
   needs org.json's jar in `tools/lib`).
-- Tests: 192 checks (SportsTest 36, SportsFeedTest 28).
+- Tests: 223 checks (SportsTest 36, SportsFeedTest 28).
 - Left for step 8: the new strings ("Sports", "LIVE", "Full time", "Next: {team}, {when}", "Today {time}"…), and the
   W/D/L letters.
+
+### Step 7: fantasy (2026-10-30, on the TV)
+
+- **Owner's call:** the Fantasy row only, no fantasy on the main screen (the middle already holds the sports cards).
+- Row: a Fantasy stop under Sports (same pill focus, the rows around it fade): one card per Sleeper team (record and
+  place in the league, this week's score against the opponent's with a bar, or "vs {opponent}" and "Week 8 · not started"
+  before the games, and last week's result) and the FPL strip (gameweek points, Rutgers FC rank with ▲ ▼ =, when the next
+  gameweek starts and its deadline, amber from 48 hours before; live: when it ends, last week's rank held and "Rank
+  updates after GW9").
+- Data (`HomeData.refreshFantasy`, only while the home screen shows; `sleeper_user`, `fpl_team` and `fpl_league` in
+  `config.properties`, all public and read-only): every 5 minutes; Sleeper's leagues, rosters and names once an hour,
+  FPL's gameweeks (1.8 MB, only the `events` array is parsed) once a day, the fixtures when the gameweek changes.
+- Sleeper's roster record already counts the league-median game (12–2 after 7 weeks), so it's used as it is.
+  "Players still to play" isn't shown: Sleeper doesn't say which players have played.
+- Tests: 223 checks (FantasyTest 31).
+- Left for step 8: the new strings ("Fantasy", "points", "Week {n} · not started", "GW{n} starts {when}", "Deadline
+  {when}"…) and the ordinals ("3rd", English only for now).
