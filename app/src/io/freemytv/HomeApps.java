@@ -199,7 +199,25 @@ final class HomeApps {
             }
             items.add(it);
         }
+        Item fire = fireTv(c);
+        if (fire != null) items.add(0, fire);
         return items;
+    }
+
+    /** HDMI 3 as the Fire TV tile (shown with no signal too: OK can wake the stick over HDMI-CEC). */
+    private static Item fireTv(Context c) {
+        if (HomeMode.AMAZON) return null;
+        for (Item it : inputs(c, true)) {
+            if (!Rules.FIRE_TV_PORT.equals(it.number)) continue;
+            it.key = "firetv";
+            it.label = "Fire TV";
+            return it;
+        }
+        return null;
+    }
+
+    static boolean isFireTv(Item it) {
+        return "firetv".equals(it.key);
     }
 
     private static String[] known(String pkg) {
@@ -401,12 +419,9 @@ final class HomeApps {
         Collections.sort(list, (a, b) -> a.getId().compareTo(b.getId()));
         // Allwinner's live TV player (HY300 and HY320 projectors) is the only way to the HDMI input on those boards.
         boolean allwinner = allwinnerInputs(c);
-        Pattern digit = Pattern.compile("(\\d)");
         for (int i = 0; i < list.size(); i++) {
             TvInputInfo info = list.get(i);
-            int number = i + 1;
-            Matcher m = digit.matcher(String.valueOf(info.loadLabel(c)));
-            if (m.find()) number = Integer.parseInt(m.group(1));
+            int number = Rules.portNumber(String.valueOf(info.loadLabel(c)), i + 1);
             // TCL TVs report "connected standby" for every port, with or without a device; only truly "connected"
             // (a device that is on and sending a signal) makes the input show up.
             int state = TvInputManager.INPUT_STATE_DISCONNECTED;
@@ -547,7 +562,7 @@ final class HomeApps {
         synchronized (HomeApps.class) {
             TILES.keySet().removeIf(k -> k.contains(".") && !seen.contains(k));
         }
-        items.add(special(c, SETTINGS, "freemytv-settings", "Free My TV", "sparkles"));
+        items.add(special(c, SETTINGS, "freemytv-settings", Ui.NAME, "sparkles"));
         return items;
     }
 

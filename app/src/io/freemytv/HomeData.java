@@ -59,6 +59,35 @@ final class HomeData {
         return "https://api.open-meteo.com/v1/forecast?latitude=" + Prefs.latitude() + "&longitude=" + Prefs.longitude() + WEATHER_QUERY;
     }
     private static final long PRICES_EVERY = 5 * 60_000L, WEATHER_EVERY = 30 * 60_000L;
+
+    /**
+     * Environment Canada (api.weather.gc.ca, no key): the air quality (AQHI) of the nearest station and the weather
+     * alerts at your location, every hour while the board shows. The owner's sources: Burnaby is in Metro Vancouver NW.
+     */
+    private static final String AQHI_STATION = "JBRIK";
+    private static final long CANADA_EVERY = 60 * 60_000L;
+
+    private static String aqhiUrl() {
+        return "https://api.weather.gc.ca/collections/aqhi-observations-realtime/items?f=json&skipGeometry=true&limit=1"
+                + "&sortby=-observation_datetime&location_id=" + AQHI_STATION;
+    }
+
+    /** The alerts whose area holds your location: a box of about 100 m around it, without the areas' outlines. */
+    private static String alertsUrl() {
+        double lat = Double.parseDouble(Prefs.latitude()), lon = Double.parseDouble(Prefs.longitude());
+        return String.format(Locale.US, "https://api.weather.gc.ca/collections/weather-alerts/items?f=json&skipGeometry=true"
+                + "&properties=alert_type,alert_name_en,risk_colour_en,status_en,event_end_datetime,expiration_datetime"
+                + "&bbox=%.4f,%.4f,%.4f,%.4f", lon - 0.001, lat - 0.001, lon + 0.001, lat + 0.001);
+    }
+
+    /** An active warning, watch or advisory (statements are left out: the air line already covers smoke). */
+    static final class Alert {
+        String name;        // "Rainfall warning", as Environment Canada names it
+        int level;          // Rules.ADVISORY, WATCH or WARNING
+        int colour;         // Environment Canada's risk colour
+        long ends, expires; // epoch ms; 0 = not given
+    }
+
     interface Listener { void onData(); }
 
     /** BTC, ETH and SOL; in Brazilian reais also the dollar (USDT/BRL), which Binance doesn't list for most currencies. */
@@ -158,8 +187,12 @@ final class HomeData {
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final List<Listener> listeners = new ArrayList<>();
-    private volatile boolean fetchingPrices, fetchingWeather;
-    private volatile long pricesFailedAt, weatherFailedAt;
+    private volatile boolean fetchingPrices, fetchingWeather, fetchingCanada;
+    private volatile long pricesFailedAt, weatherFailedAt, canadaFailedAt;
+    /** The AQHI now (NaN = unknown) and the most serious alert (null = none). */
+    volatile double aqhi = Double.NaN;
+    volatile Alert alert;
+    volatile long canadaAt;
     /** The city of the forecast in memory: another process (ScreensaverAlone) can see the city change under it. */
     private volatile String weatherFor = "";
 
@@ -186,10 +219,12 @@ final class HomeData {
             ConnectivityManager cm = c.getSystemService(ConnectivityManager.class);
             if (cm != null) cm.registerDefaultNetworkCallback(new ConnectivityManager.NetworkCallback() {
                 @Override public void onAvailable(Network network) {
-                    if (pricesFailedAt == 0 && weatherFailedAt == 0) return;
+                    if (pricesFailedAt == 0 && weatherFailedAt == 0 && canadaFailedAt == 0) return;
                     pricesFailedAt = 0;
                     weatherFailedAt = 0;
-                    main.postDelayed(HomeData.this::refreshIfStale, 2000);
+                    canadaFailedAt = 0;
+                    // Only while a screen shows (it listens): nothing is fetched behind another app.
+                    main.postDelayed(() -> { if (!listeners.isEmpty()) refreshIfStale(); }, 2000);
                 }
             });
         } catch (RuntimeException e) {
@@ -256,6 +291,77 @@ final class HomeData {
                     fetchingWeather = false;
                 }
             });
+        }
+        if (Prefs.weather()) refreshCanada(now);
+    }
+
+    /** Environment Canada's AQHI and alerts: only for a place in Canada (its alerts' box finds nothing elsewhere). */
+    private void refreshCanada(long now) {
+        if (fetchingCanada || (now - canadaAt <= CANADA_EVERY && now >= canadaAt) || failedRecently(canadaFailedAt, now)) return;
+        fetchingCanada = true;
+        io.execute(() -> {
+            try {
+                aqhi = parseAqhi(get(aqhiUrl()));
+                alert = parseAlerts(get(alertsUrl()), System.currentTimeMillis());
+                canadaAt = System.currentTimeMillis();
+                notifyListeners();
+            } catch (Exception e) {
+                canadaFailedAt = System.currentTimeMillis();
+                AppLog.w("environment canada: " + e.getMessage());
+            } finally {
+                fetchingCanada = false;
+            }
+        });
+    }
+
+    private static double parseAqhi(String body) throws Exception {
+        JSONArray features = new JSONObject(body).getJSONArray("features");
+        if (features.length() == 0) return Double.NaN;
+        return features.getJSONObject(0).getJSONObject("properties").optDouble("aqhi", Double.NaN);
+    }
+
+    /** The most serious active alert (Rules: which show, and in what order). */
+    static Alert parseAlerts(String body, long now) throws Exception {
+        JSONArray features = new JSONObject(body).getJSONArray("features");
+        Alert best = null;
+        int bestRank = -1;
+        for (int i = 0; i < features.length(); i++) {
+            JSONObject p = features.getJSONObject(i).getJSONObject("properties");
+            int level = Rules.alertLevel(p.optString("alert_type", ""));
+            long ends = isoTime(p.optString("event_end_datetime", "")), expires = isoTime(p.optString("expiration_datetime", ""));
+            String name = p.optString("alert_name_en", ""), colour = p.optString("risk_colour_en", "");
+            if (level < 0 || name.isEmpty() || !Rules.alertActive(p.optString("status_en", ""), ends, expires, now)) continue;
+            int rank = Rules.alertRank(level, colour);
+            if (rank <= bestRank) continue;
+            best = new Alert();
+            best.name = Rules.sentence(name);
+            best.level = level;
+            best.colour = Rules.alertColour(colour);
+            best.ends = ends;
+            best.expires = expires;
+            bestRank = rank;
+        }
+        return best;
+    }
+
+    /** "2026-10-30T11:41:00.000Z" in epoch ms; 0 when missing. */
+    private static long isoTime(String s) {
+        if (s.isEmpty() || s.equals("null")) return 0;
+        try {
+            return java.time.Instant.parse(s).toEpochMilli();
+        } catch (RuntimeException e) {
+            return 0;
+        }
+    }
+
+    /** "Air 2 · low risk", "Air 10+ · very high risk". */
+    static String aqhiLine(double aqhi) {
+        String n = Rules.aqhiNumber(aqhi);
+        switch (Rules.aqhiRisk(aqhi)) {
+            case 0: return Ui.trf("Air {n} · low risk", "n", n);
+            case 1: return Ui.trf("Air {n} · moderate risk", "n", n);
+            case 2: return Ui.trf("Air {n} · high risk", "n", n);
+            default: return Ui.trf("Air {n} · very high risk", "n", n);
         }
     }
 

@@ -94,6 +94,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     // banners, so those are never stretched: up to 224 × 126, 178 × 100 with eight apps, 133 × 75 with ten
     // (HomeApps.shelfVisible; past that the shelf scrolls).
     private static final float SHELF_PAD = 40, TILE_GAP = 48;
+    /** The Fire TV tile: flat Fire TV orange with dark text, two slots wide. */
+    private static final int FIRE_FILL = 0xFFFF9900, FIRE_INK = 0xFF1A1206;
+    /** It grows less than the others when focused: 20% of a double-width tile would reach its neighbor. */
+    private static final float FIRE_GROW = 0.08f;
     private static final float TILE_RADIUS = 22;
     // Tile focus (Apple TV style): it grows from the center and its shadow drops (it "rises" toward the viewer).
     private static final float FOCUS_GROW = 0.2f;
@@ -123,6 +127,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private static final float L_PLATTER_TOP = 814, L_TILE_H = 126;
     private static final float L_DATE_BASE = 330, L_CLOCK_BASE = 540, L_WEATHER_BASE = 626, L_QUOTES_BASE = 694;
     private static final int L_INK = 0xFF1D1D1F, L_DIM = 0xFF6E6E73, L_FAINT = 0xFF8E8E93;
+    // On the weather sky: secondary text brighter than grey (it keeps its contrast on the light skies), and every line
+    // with a soft dark halo behind it (the approved mocks' text shadow).
+    private static final int SKY_DIM = 0xFFE4EAF3, HALO = 0xA60B0F17;
     private static String[] tabs;
     private static int tabsGeneration = -1;
     private static final String[] TAB_KIND = {null, "movie", "tv"};
@@ -325,12 +332,30 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private long weatherLineAt = -1;
     private int weatherLinePrefs = -1;
     private String weatherLineLanguage = "";
+    // Environment Canada's lines (alert: name and "until …"; air: "Air 2 · low risk"), made again when they change.
+    private String alertName = "", alertUntil = "", airLine = "";
+    private long canadaLineAt = -1, canadaLineMinute = -1;
+    private String canadaLineLanguage = "";
+    private Paint lAlert, lAlertNote;
+
+    /** The weather sky (WeatherSky): its masks are made off the main thread for one kind at the screen's width. */
+    private final WeatherSky weatherSky = new WeatherSky();
+    private int skyKind = -1, skyWidth;
+    private boolean skyAlways;
+    /** Frames that came late while the sky moved: past SKY_SLOW_FRAMES it stays still until the screen shows again. */
+    private int skyLate;
+    private boolean skySlow;
+    private long skyNanos;
+    private static final int SKY_SLOW_FRAMES = 30;
+    private static final long SKY_FRAME_MS = 25, SKY_LATE_NANOS = 70_000_000L;
     private long clockMinute = -1;
     private boolean okDown, backDown;
     private float touchX, touchY;
     private final RectF hitBox = new RectF();   // the mouse's hit tests (menu rows, Continue Watching cards)
 
     private Paint labelPaint, metaPaint, clockPaint, buttonPaint, capsuleText, tipPaint, quotePaint, staleQuote;
+    private Paint fireName, fireNote;
+    private String noSignal;
     private Paint rowTitle, drawerLabel, cardTitle, cardText, cardDim, cardDimRight, bigTemp, hourPaint, hourTemp, dayLow;
     private Paint pricePaint, changePaint, sheetTitle;
     private TextPaint titlePaint, gridLabel, toastPaint;
@@ -593,6 +618,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             checkNotices();
             updatePalette();
             checkNight(true);
+            updateSky();        // the hour around sunrise and sunset blends
             updatePicks();      // new ones every hour
             updateSleep();
             handler.postDelayed(this, 15_000);
@@ -637,7 +663,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             v.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);   // TalkBack reads the items (Spoken)
             addView(v);
         }
-        setContentDescription("Free My TV");
+        setContentDescription(Ui.NAME);
         drawerLayer.setVisibility(INVISIBLE);
         menuLayer.setVisibility(INVISIBLE);
         for (int i = 0; i < topFocus.length; i++) {
@@ -675,6 +701,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (running) return;
         running = true;
         checkNight(false);
+        skySlow = false;
+        skyLate = 0;
+        updateSky();
         boolean h24 = Ui.h24();
         if (h24 != clock24) {   // 12/24 hours changed (the TV's or the Clock row's): the clock and the drawer's times again
             clock24 = h24;
@@ -804,6 +833,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         wake();
         updatePalette();
         checkNight(true);
+        updateSky();
         layoutStatus();
         heroDirty = statusDirty = drawerDirty = true;
         platter.invalidate();
@@ -871,6 +901,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         screen.set(0, 0, w, h);
         scene.setSize(w, h);
         watchArt.setScale(k);
+        weatherSky.setSize(w, h);
+        updateSky();
         makePaints();
         gridLabels = null;
         clockMinute = -1;
@@ -910,11 +942,19 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         lQuote = Ui.numbers(Ui.regular, 21 * k, L_FAINT);
         lTip = Ui.text(Ui.semibold, 25 * k, L_INK);
         lTip.setTextAlign(Paint.Align.CENTER);
+        fireName = Ui.text(Ui.semibold, 40 * k, FIRE_INK);
+        fireNote = Ui.text(Ui.medium, 24 * k, Ui.alpha(FIRE_INK, 0.75f));
+        noSignal = Ui.tr("No signal");
+        lAlert = Ui.text(Ui.semibold, 30 * k, WHITE);
+        lAlertNote = Ui.text(Ui.medium, 30 * k, 0xFFC9D3E3);
         lDate = Ui.text(Ui.semibold, 34 * k, L_DIM);
         lClock = Ui.numbers(Ui.light, 200 * k, L_INK);
         lClock.setLetterSpacing(-0.01f);
         lWeather = Ui.text(Ui.medium, 34 * k, L_DIM);
         lClockQuote = Ui.numbers(Ui.medium, 28 * k, L_DIM);
+        for (Paint p : new Paint[] {lTitle, lTab, lTabOn, lCardTitle, lCardMeta, lQuote, lDate, lClock, lWeather, lClockQuote}) {
+            p.setShadowLayer(16 * k, 0, 2 * k, HALO);
+        }
         lightGradient = tintShade = null;
         buttonPaint = Ui.text(Ui.semibold, 29 * k, INK);
         capsuleText = Ui.numbers(Ui.medium, 29 * k, 0xF2FFFFFF);
@@ -1031,8 +1071,30 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 || menuMoving || sheetMoving || toastFading || heroFading || bgFading || nightMoving || tintMoving || sheetOpen
                 || sheet.value > 0.001f || drawerOpen || drawer.value > 0.001f || toast != null || !toasts.isEmpty();
         idle = !busy;
+        // Nothing moving (the drawer may rest open): the sky moves, at about 30 frames a second, and only then (it stops
+        // while you move around, behind All Apps, and for good on this screen if its frames come late).
+        boolean moving = tilesMoving || statusMoving || heroMoving || drawerItemsMoving || gridMoving || drawerMoving
+                || menuMoving || sheetMoving || toastFading || heroFading || bgFading || nightMoving || tintMoving;
+        boolean skyMoves = (!moving || skyAlways) && !sheetOpen && sheet.value <= 0.001f && !skySlow && !continueMode() && weatherSky.moves();
+        if (skyMoves && skyNanos != 0 && frameTimeNanos - skyNanos < SKY_FRAME_MS * 1_000_000L) {
+            // at 60 fps (the drawer open): every other frame
+        } else if (skyMoves) {
+            if (skyNanos != 0 && frameTimeNanos - skyNanos > SKY_LATE_NANOS) {
+                if (++skyLate > SKY_SLOW_FRAMES) {
+                    skySlow = true;
+                    AppLog.w("sky: frames late, it stays still");
+                }
+            } else if (skyLate > 0) {
+                skyLate--;
+            }
+            weatherSky.step(skyNanos == 0 ? 1 / 30f : Math.min(0.1f, (frameTimeNanos - skyNanos) / 1e9f));
+            sky.invalidate();
+            skyNanos = frameTimeNanos;
+        } else {
+            skyNanos = 0;
+        }
         if (busy) Choreographer.getInstance().postFrameCallback(this);
-        else Choreographer.getInstance().postFrameCallbackDelayed(this, 1000);
+        else Choreographer.getInstance().postFrameCallbackDelayed(this, skyMoves && !skySlow ? SKY_FRAME_MS : 1000);
     }
 
     private void wake() {
@@ -1206,6 +1268,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** Swaps the background with a cross-fade (from one image to another, from the gradient to an image, or back). */
     private void showBackdrop(Backdrop b) {
+        b = null;   // the weather sky is the background now: no photos behind the board
         if (b == bgTo) return;
         long up = SystemClock.uptimeMillis();
         // In the middle of another swap, start from whichever is more visible.
@@ -1339,7 +1402,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** How dark it is: 0 = day, 1 = night (in between during the transition). */
     private float dark() {
-        return night;
+        return 1;   // dark mode only (the owner's call): light text on the weather sky by day too
     }
 
     /** The day color or the night color, depending on the night value (blended during the transition). */
@@ -1354,16 +1417,16 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     /** Text colors for the current night value (dark by day, white at night). */
     private void applyTone() {
         lTitle.setColor(tone(L_INK, WHITE));
-        lTab.setColor(tone(L_DIM, 0xFF8E8E93));
+        lTab.setColor(tone(L_DIM, SKY_DIM));
         lTabOn.setColor(tone(L_INK, WHITE));
         lCardTitle.setColor(tone(L_INK, WHITE));
-        lCardMeta.setColor(tone(L_DIM, 0xFF98989D));
-        lQuote.setColor(tone(L_FAINT, 0xB8FFFFFF));
+        lCardMeta.setColor(tone(L_DIM, SKY_DIM));
+        lQuote.setColor(tone(L_FAINT, SKY_DIM));
         lTip.setColor(tone(L_INK, WHITE));
-        lDate.setColor(tone(L_DIM, 0xFF98989D));
+        lDate.setColor(tone(L_DIM, SKY_DIM));
         lClock.setColor(tone(L_INK, WHITE));
-        lWeather.setColor(tone(L_DIM, 0xFF98989D));
-        lClockQuote.setColor(tone(L_DIM, 0xFF98989D));
+        lWeather.setColor(tone(L_DIM, SKY_DIM));
+        lClockQuote.setColor(tone(L_DIM, SKY_DIM));
         staleQuote.setColor(tone(L_FAINT, 0x99FFFFFF));
         if (continueMode()) applyWatchContrast();
     }
@@ -1447,7 +1510,63 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     // MARK: - Background
 
     private void drawSky(Canvas c) {
-        drawLightSky(c);
+        if (continueMode()) {
+            drawLightSky(c);
+            return;
+        }
+        weatherSky.draw(c);
+        // Drawer open: the sky darkens under it.
+        float d = Ui.clamp(drawer.value);
+        if (d > 0.001f) c.drawColor(Ui.alpha(0xFF000000, 0.42f * d));
+    }
+
+    /** The sky for the weather now (new masks off the main thread when its kind or the width changed) and the hour. */
+    private void updateSky() {
+        if (w == 0) return;
+        HomeData.Weather wx = data.weather;
+        int mock = mockSky();
+        final int kind = mock >= 0 ? mock : Rules.skyKind(wx.code < 0 ? 3 : wx.code), width = w, height = h;
+        skyAlways = mock >= 0;   // a sky tried from a computer moves while you move around too (to see what it costs)
+        weatherSky.setStorm(mock >= 0 ? mockSkyValue().startsWith("storm") : Rules.isStorm(wx.code));
+        if (kind != skyKind || width != skyWidth) {
+            skyKind = kind;
+            skyWidth = width;
+            LOADER.execute(() -> {
+                WeatherSky.Masks m = WeatherSky.build(kind, width, height);
+                handler.post(() -> {
+                    if (kind != skyKind || width != skyWidth) return;   // the weather changed again meanwhile
+                    weatherSky.setMasks(m);
+                    skyHour();
+                });
+            });
+        }
+        skyHour();
+    }
+
+    /**
+     * To try a sky from a computer: `adb shell settings put global freemytv_sky rain` (clear, cloudy, rain, storm or snow,
+     * with -day or -night to fix the hour), `settings delete global freemytv_sky` to go back. Read at the next tick (15 s).
+     */
+    private String mockSkyValue() {
+        String v = android.provider.Settings.Global.getString(getContext().getContentResolver(), "freemytv_sky");
+        return v == null ? "" : v.trim().toLowerCase(java.util.Locale.US);
+    }
+
+    private int mockSky() {
+        String v = mockSkyValue();
+        return v.startsWith("clear") ? WeatherSky.CLEAR : v.startsWith("cloudy") ? WeatherSky.CLOUDY
+                : v.startsWith("rain") || v.startsWith("storm") ? WeatherSky.RAIN : v.startsWith("snow") ? WeatherSky.SNOW : -1;
+    }
+
+    private void skyHour() {
+        HomeData.Weather wx = data.weather;
+        String mock = mockSkyValue();
+        float n = mock.endsWith("-day") ? 0 : mock.endsWith("-night") ? 1
+                : Rules.skyNight(System.currentTimeMillis(), wx.sunrise, wx.sunset);
+        if (weatherSky.setNight(n)) {
+            sky.invalidate();
+            wake();
+        }
     }
 
     /** Blends a color on top (the drawer's veil) as part of drawing the image, without another layer. */
@@ -1570,22 +1689,26 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     private void layoutShelf() {
         int n = Math.min(shelf.size(), shelfVisible);
+        // The Fire TV tile takes two slots.
+        boolean wide = !shelf.isEmpty() && HomeApps.isFireTv(shelf.get(0));
+        int slots = n + (wide ? 1 : 0);
         float pad = SHELF_PAD * k, gap = TILE_GAP * k;
         float full = (CONTENT_R - MARGIN) * k;
         // Tiles in the TV banners' own 16:9, so an app's art is never stretched; never taller than L_TILE_H. The glass
         // keeps its bottom edge, so with more apps it only gets lower.
-        float tw = Math.min(L_TILE_H * 16f / 9 * k, (full - Math.max(0, n - 1) * gap) / Math.max(1, n));
+        float tw = Math.min(L_TILE_H * 16f / 9 * k, (full - Math.max(0, slots - 1) * gap) / Math.max(1, slots));
         float th = tw * 9f / 16;
-        float width = n * tw + Math.max(0, n - 1) * gap, left = (w - width) / 2f;
+        float width = slots * tw + Math.max(0, slots - 1) * gap, left = (w - width) / 2f;
         float top = (L_PLATTER_TOP + L_TILE_H) * k - th;
         platterRect.set(left - pad, top, left + width + pad, top + th + 2 * pad);
         snap(platterRect);
         shelfFirst = Math.max(0, Math.min(shelfFirst, shelf.size() - n));
-        float x = left - shelfFirst * (tw + gap), y = top + pad;
+        float x = left - shelfFirst * (tw + gap) - (wide && shelfFirst > 0 ? tw + gap : 0), y = top + pad;
         for (int i = 0; i < shelf.size(); i++) {
-            tileRects[i].set(x, y, x + tw, y + th);
+            float iw = wide && i == 0 ? 2 * tw + gap : tw;
+            tileRects[i].set(x, y, x + iw, y + th);
             snap(tileRects[i]);
-            x += tw + gap;
+            x += iw + gap;
         }
         crispLogos.clear();
     }
@@ -1595,7 +1718,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         int n = Math.min(shelf.size(), shelfVisible);
         int first = Math.max(0, Math.min(Math.max(shelfFirst, shelfIndex - n + 1), Math.min(shelfIndex, shelf.size() - n)));
         if (first == shelfFirst || tileRects.length == 0) return;
-        float dx = (shelfFirst - first) * (tileRects[0].width() + TILE_GAP * k);
+        float dx = tileRects[shelfFirst].left - tileRects[first].left;   // the wide Fire TV tile is wider than one step
         for (int i = 0; i < tileRects.length; i++) {
             tileRects[i].offset(dx, 0);
             if (!snap && i < tileSlide.length) tileSlide[i].value -= dx;
@@ -1835,7 +1958,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         HomeApps.Item it = shelf.get(i);
         // Lifted to be moved: a little bigger than focused, with a deeper shadow.
         float l = i == liftIndex ? Math.max(0, moveLift.value) : 0;
-        float f = tileFocus[i].value, fc = Ui.clamp(f), s = 1 + FOCUS_GROW * f + LIFT_GROW * l;
+        float f = tileFocus[i].value, fc = Ui.clamp(f), s = 1 + (HomeApps.isFireTv(it) ? FIRE_GROW : FOCUS_GROW) * f + LIFT_GROW * l;
         RectF base = tileRects[i];
         float bw = base.width(), bh = base.height(), r0 = TILE_RADIUS * k;
         float cx = base.centerX(), cy = base.centerY();
@@ -1852,7 +1975,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         shadows.draw(c, tmp, r0, DEEP_BLUR * k, shadowDeep);
         c.restore();
         int[] style = TILE_STYLE.get(it.key);
-        if (it.logo != null && style != null) {
+        if (HomeApps.isFireTv(it)) {
+            drawFireTv(c, it, cell, r, s);
+        } else if (it.logo != null && style != null) {
             if (tileShaders.length != shelf.size() || tileShaderH != bh) {
                 tileShaders = new LinearGradient[shelf.size()];
                 tileShaderH = bh;
@@ -1885,6 +2010,25 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         } else {
             if (it.tile != null) roundImage(c, it.tile, it.tileShader, cell, r);
         }
+    }
+
+    /** Flat orange, "Fire TV" on the left; with no signal on the port, dimmer, with "No signal" under the name. */
+    private void drawFireTv(Canvas c, HomeApps.Item it, RectF cell, float r, float s) {
+        tileFill.setShader(null);
+        tileFill.setColor(it.connected ? FIRE_FILL : Ui.alpha(FIRE_FILL, 0.6f));
+        c.drawRoundRect(cell, r, r, tileFill);
+        c.save();
+        c.translate(cell.left + 32 * k * s, cell.centerY());
+        c.scale(s, s);
+        float cap = Ui.cap(fireName);
+        if (it.connected) {
+            c.drawText(it.label, 0, cap / 2, fireName);
+        } else {
+            float gap = 10 * k, note = Ui.cap(fireNote), top = -(cap + gap + note) / 2;
+            c.drawText(it.label, 0, top + cap, fireName);
+            c.drawText(noSignal, 0, top + cap + gap + note, fireNote);
+        }
+        c.restore();
     }
 
     /**
@@ -3306,7 +3450,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     /** Swaps the lifted app with its neighbor; both slide from where they are to their new slots. */
     private void shiftReorder(int dx) {
         int i = shelfIndex, j = i + dx;
-        if (j < 0 || j >= shelf.size()) return;
+        if (j < 0 || j >= shelf.size() || HomeApps.isFireTv(shelf.get(j))) return;
         HomeApps.Item it = shelf.get(i);
         shelf.set(i, shelf.get(j));
         shelf.set(j, it);
@@ -3343,7 +3487,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         retarget(false);
         if (!changed) return;
         final List<String> order = new ArrayList<>();
-        for (HomeApps.Item it : shelf) order.add(it.pkg);
+        for (HomeApps.Item it : shelf) if (it.kind == HomeApps.APP) order.add(it.pkg);
         final Context c = getContext().getApplicationContext();
         LOADER.execute(() -> {
             // The saved list may hold more than the shelf shows (apps not installed, past the limit): the shown ones
@@ -4348,17 +4492,64 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (night > 0.001f) drawImage(c, b.nightImage, alpha * night);
     }
 
+    /** Environment Canada's lines, made again when the data, the language or the clock's format change. */
+    private void canadaLines() {
+        if (data.canadaAt == canadaLineAt && Ui.language.equals(canadaLineLanguage) && clockMinute == canadaLineMinute) return;
+        canadaLineAt = data.canadaAt;
+        canadaLineLanguage = Ui.language;
+        canadaLineMinute = clockMinute;
+        long now = System.currentTimeMillis();
+        HomeData.Alert a = data.alert;
+        boolean on = a != null && (a.ends == 0 || a.ends > now) && (a.expires == 0 || a.expires > now);
+        alertName = on ? a.name : "";
+        if (!on || a.ends == 0) {
+            alertUntil = "";
+        } else {
+            boolean today = java.util.concurrent.TimeUnit.MILLISECONDS.toDays(a.ends + java.util.TimeZone.getDefault().getOffset(a.ends))
+                    == java.util.concurrent.TimeUnit.MILLISECONDS.toDays(now + java.util.TimeZone.getDefault().getOffset(now));
+            String when = today ? Ui.time(a.ends) : Ui.datePattern("format|EEE").format(a.ends) + " " + Ui.hour(a.ends);
+            alertUntil = Ui.trf("until {time}", "time", when);
+        }
+        airLine = Double.isNaN(data.aqhi) ? "" : HomeData.aqhiLine(data.aqhi);
+    }
+
+    /**
+     * An active alert: one line with a mark in Environment Canada's risk colour, on a dark scrim (it isn't pressed, so
+     * no box beyond what the text needs to read). With the clock, above the date; with the picks, after the title.
+     */
+    private void drawAlert(Canvas c) {
+        if (alertName.isEmpty() || !Prefs.weather()) return;
+        HomeData.Alert a = data.alert;
+        if (a == null) return;
+        float x = clockMode() ? MARGIN * k : titleRight + 48 * k;
+        float base = clockMode() ? (L_DATE_BASE - 92) * k : L_TITLE_BASE * k - 14 * k;
+        float cap = Ui.cap(lAlert), padX = 22 * k, padY = 18 * k, mark = 8 * k, gap = 16 * k;
+        float nameW = lAlert.measureText(alertName), noteW = alertUntil.isEmpty() ? 0 : gap + lAlertNote.measureText(alertUntil);
+        tmp.set(x, base - cap - padY, x + padX + mark + gap + nameW + noteW + padX, base + padY);
+        fill.setShader(null);
+        fill.setColor(0xB80B0F17);
+        c.drawRect(tmp, fill);
+        fill.setColor(a.colour);
+        c.drawRect(x + padX, base - cap - 2 * k, x + padX + mark, base + 2 * k, fill);
+        float tx = x + padX + mark + gap;
+        c.drawText(alertName, tx, base, lAlert);
+        if (!alertUntil.isEmpty()) c.drawText(alertUntil, tx + nameW + gap, base, lAlertNote);
+    }
+
     private void drawLightTop(Canvas c) {
         applyTone();
+        canadaLines();
         if (clockMode()) {
             titleRight = 0;
             drawClock(c);
+            drawAlert(c);
             if (HomeData.coinCount() > 0 || playingTab != null) drawQuotes(c);
             return;
         }
         String hello = picksMode() ? Ui.tr("For You") : Ui.tr("Continue Watching");
         c.drawText(hello, MARGIN * k - Ui.leftBearing(lTitle, hello), L_TITLE_BASE * k, lTitle);
         titleRight = MARGIN * k + lTitle.measureText(hello);
+        drawAlert(c);
         if (!picksMode()) {
             if (continueMode()) drawWatchRow(c);
             if (HomeData.coinCount() > 0 || playingTab != null) drawQuotes(c);
@@ -4419,6 +4610,21 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         float sw = Symbols.width(getContext(), symbol, size);
         Symbols.draw(getContext(), c, symbol, x + sw / 2, base - Ui.halfCap(lWeather), size, lWeather.getColor());
         c.drawText(weatherLine, x + sw + 16 * k, base, lWeather);
+        if (airLine.isEmpty()) return;
+        // The air: quiet when the risk is low; from moderate (4) amber on its own dark amber, the one filled text.
+        float ax = x + sw + 16 * k + lWeather.measureText(weatherLine) + 40 * k;
+        if (Rules.aqhiRisk(data.aqhi) == 0) {
+            c.drawText(airLine, ax, base, lWeather);
+            return;
+        }
+        float cap = Ui.cap(lWeather), pad = 14 * k;
+        fill.setShader(null);
+        fill.setColor(0xFF2A2112);
+        c.drawRect(ax, base - cap - pad, ax + 2 * pad + lWeather.measureText(airLine), base + pad, fill);
+        int ink = lWeather.getColor();
+        lWeather.setColor(0xFFFFD08A);
+        c.drawText(airLine, ax + pad, base, lWeather);
+        lWeather.setColor(ink);
     }
 
     /**
