@@ -19,6 +19,7 @@ public final class RulesTest {
         airQuality();
         alerts();
         ports();
+        board();
         System.out.println(passed + " checks passed" + (failed > 0 ? ", " + failed + " failed" : ""));
         if (failed > 0) System.exit(1);
     }
@@ -119,6 +120,44 @@ public final class RulesTest {
         eq("HDMI3 is 3", 3, Rules.portNumber("HDMI3", 1));
         eq("no number: its place in the list", 2, Rules.portNumber("Fire TV", 2));
         check("the Fire TV tile is on HDMI 3", Rules.FIRE_TV_PORT.equals("3"));
+        check("the JBL soundbar is sound only", Rules.soundOnly("JBL BAR 5.1"));
+        check("the Fire TV Stick isn't", !Rules.soundOnly("Fire TV Stick"));
+        check("nor a Switch", !Rules.soundOnly("Nintendo Switch"));
+        String[] ports = {"1", "2", "3"};
+        eq("HDMI 3 on: it wins", 2, Rules.shelfPort(ports, new boolean[] {true, true, true}));
+        eq("HDMI 3 off, 1 on: HDMI 1", 0, Rules.shelfPort(ports, new boolean[] {true, true, false}));
+        eq("only HDMI 2 on: HDMI 2", 1, Rules.shelfPort(ports, new boolean[] {false, true, false}));
+        eq("nothing on: HDMI 3 anyway", 2, Rules.shelfPort(ports, new boolean[] {false, false, false}));
+        eq("no HDMI 3 and nothing on: none", -1, Rules.shelfPort(new String[] {"1"}, new boolean[] {false}));
+        eq("the stick's CEC name: fire tv", "fire tv", Rules.portTileName("Fire TV Stick", "3"));
+        eq("a Switch", "Switch", Rules.portTileName("Nintendo Switch", "3"));
+        eq("a Switch named by CEC as NINTENDO", Rules.TILE_SWITCH, Rules.portTile("NINTENDO"));
+        eq("anything else keeps its name", "PlayStation 5", Rules.portTileName("PlayStation 5", "3"));
+        eq("nothing named: the port", "HDMI 3", Rules.portTileName(" ", "3"));
+        eq("the port's own label is other", Rules.TILE_OTHER, Rules.portTile("HDMI 3"));
+    }
+
+    private static void board() {
+        check("9 pm is quiet", Rules.quietHours(21));
+        check("midnight is quiet", Rules.quietHours(0));
+        check("5 am is quiet", Rules.quietHours(5));
+        check("6 am isn't", !Rules.quietHours(6));
+        check("8 pm isn't", !Rules.quietHours(20));
+        int C = Rules.CLEAR, R = Rules.RAIN, S = Rules.SNOW, D = Rules.CLOUDY;
+        int[] from = Rules.precipChange(D, new int[] {D, D, R, R});
+        check("dry now, rain in 2 hours: rain from then", from[0] == Rules.STARTS && from[1] == 2 && from[2] == R);
+        int[] until = Rules.precipChange(R, new int[] {R, D, D});
+        check("raining, dry in 1 hour: rain until then", until[0] == Rules.STOPS && until[1] == 1 && until[2] == R);
+        check("snow stopping says snow", Rules.precipChange(S, new int[] {C})[2] == S);
+        eq("dry all along: nothing to say", Rules.NO_CHANGE, Rules.precipChange(C, new int[] {C, D, C})[0]);
+        eq("wet all along: nothing to say", Rules.NO_CHANGE, Rules.precipChange(R, new int[] {R, S})[0]);
+        eq("no hours: nothing to say", Rules.NO_CHANGE, Rules.precipChange(R, new int[0])[0]);
+        // The TV's row as Android lists it: Live TV, HDMI 1, HDMI 2, HDMI 3, with the Fire TV Stick on HDMI 3.
+        int on = Rules.PORT_ON, live = Rules.LIVE_TV, empty = Rules.PORT_EMPTY;
+        eq("sources: HDMI 3, Live TV, HDMI 1, HDMI 2", "[3, 0, 1, 2]",
+                java.util.Arrays.toString(Rules.sourceOrder(new int[] {live, empty, empty, on})));
+        eq("sources: ports with devices keep their order", "[1, 2, 0]",
+                java.util.Arrays.toString(Rules.sourceOrder(new int[] {live, on, on})));
     }
 
     /** Today at `hour`:`minute` on the TV's clock. */

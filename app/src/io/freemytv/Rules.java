@@ -61,6 +61,28 @@ final class Rules {
         return 0.7f * (1 - (t - 0.16f) / 0.44f);
     }
 
+    static final int NO_CHANGE = 0, STARTS = 1, STOPS = 2;
+
+    /**
+     * The weather's one sentence: whether rain or snow starts (STARTS) or stops (STOPS) within the next `hours` kinds
+     * (skyKind of each coming hour), and at which hour (the result's second value); NO_CHANGE when neither.
+     * The first value is the change, the third the kind (RAIN or SNOW) it's about.
+     */
+    static int[] precipChange(int nowKind, int[] hours) {
+        boolean wet = nowKind == RAIN || nowKind == SNOW;
+        for (int i = 0; i < hours.length; i++) {
+            boolean w = hours[i] == RAIN || hours[i] == SNOW;
+            if (wet && !w) return new int[] {STOPS, i, nowKind};
+            if (!wet && w) return new int[] {STARTS, i, hours[i]};
+        }
+        return new int[] {NO_CHANGE, -1, nowKind};
+    }
+
+    /** Quiet hours, 9 pm to 6 am: the board dims and the sky stays still. */
+    static boolean quietHours(int hour) {
+        return hour >= 21 || hour < 6;
+    }
+
     /** Milliseconds since midnight on the TV's clock; `fallback` for 0 (no data). */
     static long timeOfDay(long at, long fallback) {
         if (at == 0) return fallback;
@@ -127,6 +149,64 @@ final class Rules {
 
     /** The Fire TV Stick's port: first on the shelf, a wide tile, never moved or removed (HomeApps.fireTv). */
     static final String FIRE_TV_PORT = "3";
+
+    static final int PORT_ON = 0, LIVE_TV = 1, PORT_EMPTY = 2;
+
+    /**
+     * The TV sources row's order: ports with a device on them first (the Fire TV Stick), then Live TV, then the empty
+     * ports, each keeping its own order. `rank` is PORT_ON, LIVE_TV or PORT_EMPTY per source; returns their indexes.
+     */
+    static int[] sourceOrder(int[] rank) {
+        int[] order = new int[rank.length];
+        int n = 0;
+        for (int r = PORT_ON; r <= PORT_EMPTY; r++) {
+            for (int i = 0; i < rank.length; i++) if (rank[i] == r) order[n++] = i;
+        }
+        return order;
+    }
+
+    /** The ports the shelf's first tile can show, best first: the Fire TV Stick's, then HDMI 1, then HDMI 2. */
+    static final String[] SHELF_PORTS = {FIRE_TV_PORT, "1", "2"};
+
+    /**
+     * Which port the shelf's first tile shows: the first in SHELF_PORTS with a device on it (`on`), else HDMI 3 even
+     * with nothing on it (OK can still wake the stick). `numbers` are the ports' numbers; returns an index, or -1.
+     */
+    static int shelfPort(String[] numbers, boolean[] on) {
+        for (String want : SHELF_PORTS) {
+            for (int i = 0; i < numbers.length; i++) if (want.equals(numbers[i]) && on[i]) return i;
+        }
+        for (int i = 0; i < numbers.length; i++) if (FIRE_TV_PORT.equals(numbers[i])) return i;
+        return -1;
+    }
+
+    /** An HDMI-CEC name that's a soundbar or receiver (on the port for ARC), not something you watch. */
+    static boolean soundOnly(String name) {
+        String n = name.toLowerCase(java.util.Locale.ROOT);
+        for (String w : new String[] {"bar", "sound", "audio", "receiver", "avr", "sonos", "speaker", "theater", "theatre"}) {
+            if (n.contains(w)) return true;
+        }
+        return false;
+    }
+
+    static final int TILE_FIRE = 0, TILE_SWITCH = 1, TILE_OTHER = 2;
+
+    /** How the shelf's HDMI 3 tile looks, from the name of what's on the port (HDMI-CEC's, or yours). */
+    static int portTile(String name) {
+        String n = name.toLowerCase(java.util.Locale.ROOT);
+        if (n.contains("fire")) return TILE_FIRE;
+        if (n.contains("switch") || n.contains("nintendo")) return TILE_SWITCH;
+        return TILE_OTHER;
+    }
+
+    /** The tile's word: "fire tv" (lowercase, like a wordmark), "Switch", else the device's name or "HDMI 3". */
+    static String portTileName(String name, String port) {
+        switch (portTile(name)) {
+            case TILE_FIRE: return "fire tv";
+            case TILE_SWITCH: return "Switch";
+            default: return name.trim().isEmpty() ? "HDMI " + port : name.trim();
+        }
+    }
 
     /** An HDMI port's number from its label ("HDMI 3" → 3), else `fallback` (its place in the list). */
     static int portNumber(String label, int fallback) {

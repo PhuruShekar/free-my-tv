@@ -345,13 +345,17 @@ final class Ui {
         p.setTypeface(face);
         p.setTextSize(size);
         p.setColor(color);
+        p.setFontFeatureSettings(LETTERS);
         return p;
     }
+
+    /** Inter's alternates that tell l and I apart from across the room: l with a tail, I with serifs. */
+    private static final String LETTERS = "'cv05', 'cv08'";
 
     /** Fixed-width digits (the clock and the prices don't jitter when a digit changes). */
     static Paint numbers(Typeface face, float size, int color) {
         Paint p = text(face, size, color);
-        p.setFontFeatureSettings("'tnum'");
+        p.setFontFeatureSettings("'tnum', " + LETTERS);
         return p;
     }
 

@@ -351,3 +351,58 @@ Each step builds, installs on the TV (192.168.1.71) and gets checked there befor
 - Logic with no Android in it is in `Rules` and checked by `tools/test.sh` (53 checks).
 - Left: the grey text loses contrast on the light rain sky (needs the soft halo); quiet hours
   come with the board layout (step 4).
+
+### Step 4: board layout, design pass (2026-10-29, for review)
+
+Canvas row "Step 4 · Board layout": daytime, the rows one press down, and quiet hours, as they
+look once this step is built and before buses (step 5) and sports (step 6) fill the middle.
+- Main screen: clock top left (the dominant item), weather top right (temperature, one sentence,
+  air quality), the alert under it when one is on, then sky, then the shelf. Nothing in the
+  middle until steps 5 and 6.
+- Square corners on every tile, no glass panel behind the shelf (TV4: the tiles are the
+  pressable things, the panel was a box around them).
+- **Owner's call:** the three buttons (Live TV, HDMI Inputs, Settings) stay at the top right, square, with the weather under them.
+- **Owner's call:** one press down, the drawer's row as today: TV sources, then Shortcuts (All Apps, Home Settings, TV Settings). TV sources list what has a device first: HDMI 3, Live TV, then the empty HDMI 1 and HDMI 2, dimmed. Then picks, then the weather rows.
+- Quiet hours (9 pm to 6 am): the same places, text dimmed to about 70%, the apps you're not on
+  at 50%, the sky still (no drift, no rain or snow motion, no lightning), the focused tile at
+  full strength.
+- **Owner's call:** keep Inter (already in the APK), with its alternates that tell l and I apart (cv05, cv08).
+
+
+### Step 4a: the main screen (2026-10-29, on the TV)
+
+- The board's top: a thin 150 px clock at the top left with the weekday and date beside it; at the top
+  right the three square buttons, and under them the weather (temperature, condition with high and low,
+  one sentence when rain or snow starts or stops in the next 12 hours, the air), then the alert.
+- The main screen no longer shows picks or Continue Watching (`HomeView.BOARD`); square tiles with a white
+  ring on focus, no glass behind the shelf; square drawer tiles and cards.
+- TV sources sorted by `Rules.sourceOrder`; checked on the TV: Fire TV Stick (HDMI 3), Live TV, HDMI 1, HDMI 2.
+- Quiet hours (`Rules.quietHours`, 9 pm to 6 am): the top at 70%, the tiles you're not on at half, the sky
+  still. Seen on the TV at 11:44 pm.
+- Tests: 77 checks. Left for 4b: the picks row under the sources; the new strings ("Rain from {time}" and
+  the rest) wait for the catalogues in step 8.
+
+### Step 4b: the picks row (2026-10-29, on the TV)
+
+- The picks ("For You", the existing string) are a row in the drawer under the TV sources: the same cards as the
+  old top of the screen (the wide focused one, the others as posters), square, 400 px tall. Down from the
+  sources scrolls the drawer up 634 px (`drawerScroll`) so the row and the weather card under it both show; Up
+  goes back to the source nearest the card, Back closes the drawer. OK opens the pick as before.
+- The picks no longer change the background: the weather sky stays behind the board.
+- Checked on the TV: Down, Right, Up and Back; no errors in the log. Without a TMDB key there's no row and the
+  weather card stays right under the sources.
+
+### Step 4c: owner's fixes (2026-10-29, on the TV)
+
+- **Owner's call:** the HDMI 3 tile is the size of the apps and grows like them. It's named and coloured after
+  what's on the port (`Rules.portTile`): "fire tv" in lowercase on Fire TV orange, "Switch" on Nintendo red, else
+  the device's name or "HDMI 3" on a dark tile. The last name a device gave is kept for when it's asleep. It still
+  stays first on the shelf.
+- The picks keep their pictures' shape: the wide card in 16:9, the posters in 2:3, and cover images crop instead
+  of stretching (that also fixes the old layout's wide card).
+- Row names ("Inputs", "Shortcuts", "For You") at 32 px, near white; the shelf lines up with the clock's margin.
+- **Owner's call:** the shelf's first tile shows the HDMI port that's on, HDMI 3 first, then 1, then 2
+  (`Rules.shelfPort`); with nothing on, HDMI 3, dimmed. It follows the TV's input changes (the shelf reloads).
+- The Fire TV tile's name is a wordmark: "fire" with a small raised "tv" (24 px, its top level with the f's).
+- HDMI 3 carries two HDMI-CEC devices on this TV (the JBL BAR 5.1 on ARC and the Fire TV Stick): a port's name
+  now prefers a player over a soundbar or receiver (`Rules.soundOnly`).

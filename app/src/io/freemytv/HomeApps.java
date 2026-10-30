@@ -74,6 +74,7 @@ final class HomeApps {
         float logoInk;      // fraction of the logo with ink (thin logos are drawn larger, with the same "weight")
         float logoScale = 1; // size tweak by eye (compact logos need more)
         boolean connected = true;
+        int portTile = Rules.TILE_OTHER;   // the HDMI 3 tile's look (Rules.portTile), worked out once
 
         void setTile(Bitmap b) {
             tile = b;
@@ -204,13 +205,31 @@ final class HomeApps {
         return items;
     }
 
-    /** HDMI 3 as the Fire TV tile (shown with no signal too: OK can wake the stick over HDMI-CEC). */
+    /**
+     * The shelf's first tile: the HDMI port that's on, HDMI 3 first, then 1, then 2 (Rules.shelfPort), named and
+     * coloured after what's on it (the Fire TV Stick, a Switch, anything else; Rules.portTile). With nothing on, HDMI 3
+     * dimmed: OK can wake the stick over HDMI-CEC. A device asleep may not give its name, so the last one is kept.
+     */
     private static Item fireTv(Context c) {
         if (HomeMode.AMAZON) return null;
-        for (Item it : inputs(c, true)) {
-            if (!Rules.FIRE_TV_PORT.equals(it.number)) continue;
+        List<Item> ports = inputs(c, true);
+        String[] numbers = new String[ports.size()];
+        boolean[] on = new boolean[ports.size()];
+        for (int i = 0; i < numbers.length; i++) {
+            numbers[i] = ports.get(i).number;
+            on[i] = ports.get(i).connected;
+        }
+        int pick = Rules.shelfPort(numbers, on);
+        if (pick >= 0) {
+            Item it = ports.get(pick);
+            android.content.SharedPreferences names = c.getSharedPreferences("ports", Context.MODE_PRIVATE);
+            String name = it.label == null ? "" : it.label.trim();
+            boolean bare = name.isEmpty() || name.equalsIgnoreCase("HDMI " + it.number) || name.equalsIgnoreCase("HDMI" + it.number);
+            if (bare) name = names.getString("name" + it.number, "");
+            else names.edit().putString("name" + it.number, name).apply();
             it.key = "firetv";
-            it.label = "Fire TV";
+            it.portTile = Rules.portTile(name);
+            it.label = Rules.portTileName(name, it.number);
             return it;
         }
         return null;
@@ -410,7 +429,10 @@ final class HomeApps {
                 if (info.getParentId() == null) {
                     list.add(info);
                 } else {
-                    devices.put(info.getParentId(), String.valueOf(info.loadLabel(c)).trim());
+                    // Two devices on one port (a soundbar on ARC and the stick through it): the player's name wins.
+                    String name = String.valueOf(info.loadLabel(c)).trim();
+                    String had = devices.get(info.getParentId());
+                    if (had == null || Rules.soundOnly(had) && !Rules.soundOnly(name)) devices.put(info.getParentId(), name);
                 }
             }
         } catch (RuntimeException e) {
