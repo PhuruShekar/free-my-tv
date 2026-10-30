@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks the app's logic that has no Android in it (app/src/io/freemytv/Rules.java) on this computer, with only a JDK:
+# Checks the app's logic that has no Android in it (app/src/io/freemytv/Rules.java and Transit.java) on this computer, with only a JDK:
 #
 #   tools/test.sh
 #
@@ -12,7 +12,7 @@ JAVA="${JAVA_HOME:+$JAVA_HOME/bin/}java"
 command -v "$JAVAC" >/dev/null 2>&1 || { echo "JDK not found. Install JDK 17 and set JAVA_HOME."; exit 1; }
 rm -rf out/test
 mkdir -p out/test
-"$JAVAC" -nowarn -Xlint:-options -source 8 -target 8 -d out/test app/src/io/freemytv/Rules.java app/test/io/freemytv/*Test.java
+"$JAVAC" -nowarn -Xlint:-options -source 8 -target 8 -d out/test app/src/io/freemytv/Rules.java app/src/io/freemytv/Transit.java app/test/io/freemytv/*Test.java
 for t in app/test/io/freemytv/*Test.java; do
   name="$(basename "$t" .java)"
   echo "$name:"

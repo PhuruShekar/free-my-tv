@@ -137,6 +137,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private static int tabsGeneration = -1;
     private static final String[] TAB_KIND = {null, "movie", "tv"};
     private static final int Z_TOP = 4, Z_CARDS = 5, Z_WATCH = 6;
+    // The board's buses row, one press down: a stop of its own (nothing to press), so the timelines can be read there.
+    private static final int Z_BUSES = 7;
     /**
      * 808 TV's glance board: the main screen is the clock, the weather and the shelf (Home Settings' "Top of the
      * screen" no longer applies), the picks move to the rows below, and 9 pm to 6 am is quiet (dimmer, the sky still).
@@ -148,6 +150,32 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     // scrolls the drawer up by PICKS_SCROLL, so the row and the weather card under it both show.
     private static final float PICKS_TITLE = 736, PICKS_TOP = 766, PICKS_H = 400, PICKS_TALL = 267, PICKS_SCROLL = 634;
     private static final float WEATHER_BELOW = 1300;
+    // The buses (808 TV): two timelines, one per place, on the next 45 minutes. In the rows below they come right after
+    // the TV sources (BUS_ROW pushes the picks and the weather down); on the main screen at BUS_TOP.
+    private static final float BUS_ROW = 380, BUS_ROW_TITLE = 736, BUS_ROW_TOP = 770, BUS_TOP = 470, BUS_H = 140, BUS_GAP = 20;
+    private static final int BUS_DIM = 0xB3;   // the rows around the focused buses, at 70%
+    private static final float BUS_BAR_X = 576, BUS_BAR_W = 1100, BUS_LINE_BASE = 765, BUS_QUIET_BASE = 826;
+    private static final float BUS_SCROLL = 230;   // the drawer scrolls up this much with the buses row in focus
+    private static final int BUS_CHIP = 0xFF2F80ED, BUS_AMBER = 0xFFFFB547, BUS_PLAN = 0xFFC9D2DF, BUS_TRACK = 0x800B0F17;
+    private static final String[] BUS_PLACES = {"Edmonds Station", "Metrotown"};
+
+    /** One place's next 3 buses as drawn: the strings and the marks' places, made once a minute (never in onDraw). */
+    private static final class BusLine {
+        String place = "", shortPlace = "", leave = "", arrive = "", quiet = "", in = "";   // in: the day line's "Leave in 3 min"
+        final String[] route = new String[3], mins = new String[3];
+        final float[] at = new float[3];
+        final boolean[] live = new boolean[3];
+        int n;
+        long first;   // the first bus's leave time
+    }
+
+    private final BusLine[] busLines = {new BusLine(), new BusLine()};
+    private int busView = -1, busSoon = -1;
+    private long busMinute = -1;
+    private String busNote = "", busNow = "", busEnd = "", busThen = "", busNext = "", busTitle = "";
+    private Paint busPlace, busLeave, busArrive, busChipText, busMins, busSmall, busClock;
+    private final float[] busTaken = new float[12];   // spans under a bar: routes moved down, then minutes
+    private boolean busFocused;
     private final Spring drawerScroll = new Spring(0.4f, 0.9f, 0);
 
     private final Activity activity;
@@ -631,6 +659,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             wake();
             playing.start();   // the listener allowed after the screen showed (a no-op once watching)
             data.refreshIfStale();
+            if (BOARD) data.refreshBuses();
             recs.refreshIfStale();
             checkNotices();
             updatePalette();
@@ -737,6 +766,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         data.addListener(this);
         recs.addListener(this);
         data.refreshIfStale();
+        if (BOARD) data.refreshBuses();
         recs.refreshIfStale();
         Photos.importInbox(getContext(), ownReady);   // photos a computer just sent
         ImmichPhotos.syncIfDue(getContext(), ownReady);   // or a new choice from the Immich server, every 6 hours
@@ -852,6 +882,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         checkNight(true);
         updateSky();
         layoutStatus();
+        updateBuses(true);
         heroDirty = statusDirty = drawerDirty = true;
         platter.invalidate();
     }
@@ -881,7 +912,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         measure(platter, width, Math.round(320 * kk));
         measure(tiles, width, Math.round(270 * kk));
         // On the board it also holds the picks row and the weather card under it (drawerScroll brings them up).
-        measure(drawerLayer, width, Math.round((BOARD ? 1200 : 600) * kk));
+        measure(drawerLayer, width, Math.round((BOARD ? 1200 + BUS_ROW : 600) * kk));
         measure(sheetLayer, width, height);
         measure(menuLayer, width, height);
         measure(toastLayer, width, Math.round(220 * kk));   // full width: a toast may sit right of a long title
@@ -974,7 +1005,18 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         lClockQuote = Ui.numbers(Ui.medium, 28 * k, L_DIM);
         lTemp = Ui.numbers(Ui.displaySemibold, 72 * k, WHITE);
         lDay = Ui.text(Ui.semibold, 30 * k, WHITE);
-        for (Paint p : new Paint[] {lTitle, lTab, lTabOn, lCardTitle, lCardMeta, lQuote, lDate, lClock, lWeather, lClockQuote, lTemp, lDay}) {
+        busPlace = Ui.text(Ui.medium, 28 * k, 0xFFE4EAF3);
+        busLeave = Ui.numbers(Ui.displaySemibold, 64 * k, WHITE);
+        busArrive = Ui.numbers(Ui.semibold, 32 * k, WHITE);
+        busChipText = Ui.numbers(Ui.semibold, 24 * k, WHITE);
+        busMins = Ui.numbers(Ui.semibold, 26 * k, WHITE);
+        busSmall = Ui.numbers(Ui.medium, 24 * k, 0xFFE4EAF3);
+        busClock = new Paint(Paint.ANTI_ALIAS_FLAG);
+        busClock.setStyle(Paint.Style.STROKE);
+        busClock.setStrokeWidth(2.2f * k);
+        busClock.setStrokeCap(Paint.Cap.ROUND);
+        for (Paint p : new Paint[] {lTitle, lTab, lTabOn, lCardTitle, lCardMeta, lQuote, lDate, lClock, lWeather, lClockQuote, lTemp, lDay,
+                busPlace, busLeave, busArrive, busMins, busSmall}) {
             // Tighter on small text: a wide glow spreads too thin behind thin letters to darken a light sky.
             p.setShadowLayer(Math.max(6 * k, p.getTextSize() * 0.28f), 0, 1.5f * k, HALO);
         }
@@ -1139,7 +1181,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void updateMotion() {
         float d = drawer.value, dc = Ui.clamp(d), s = Ui.clamp(sheet.value);
         float home = 1 - s, top = home * (1 - smoothstep(0, 0.32f, dc));
-        float shift = SHIFT * k, scrolled = drawerScroll.value * PICKS_SCROLL * k;
+        float shift = SHIFT * k, scrolled = drawerScroll.value * (PICKS_SCROLL + busRow()) * k;
         float lift = -d * shift - scrolled;
         float dim = quiet ? QUIET_TEXT : 1;
         show(heroLayer, top * dim, lift);
@@ -1207,11 +1249,20 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         dateText = Ui.date(now);
         weekdayText = Ui.datePattern("format|EEEE").format(now);
         dayDate = Ui.datePattern("format|MMMM d").format(now);
-        boolean q = BOARD && Rules.quietHours(java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY));
+        int hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+        boolean q = BOARD && Rules.quietHours(hour);
         if (q != quiet) {
             quiet = q;
             motionDirty = tilesDirty = true;
         }
+        // To try a bus view from a computer: `adb shell settings put global freemytv_buses 0` (timelines, 1 line, 2 quiet);
+        // `settings delete global freemytv_buses` to go back. Read at the next minute.
+        int view = android.provider.Settings.Global.getInt(getContext().getContentResolver(), "freemytv_buses", Rules.busView(hour));
+        if (view != busView) {
+            busView = view;
+            heroDirty = tilesDirty = true;
+        }
+        updateBuses(false);
         return true;
     }
 
@@ -1931,6 +1982,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private void drawTiles(Canvas c) {
+        // Quiet hours' bus line sits here, over the shelf: this layer isn't dimmed with the board's top.
+        if (BOARD && busView == Rules.BUS_QUIET && busLines[0].n + busLines[1].n > 0) drawBusQuiet(c);
         // The focused one last: it grows over its neighbors without being covered by them.
         int top = -1;
         float most = 0.02f;
@@ -2239,7 +2292,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             snap(drawerRects[i]);
             x += tw + gap;
         }
-        float cardsTop = (picksRow() ? WEATHER_BELOW : CARDS_TOP) * k, split = left + (right - left) * 0.585f;
+        float cardsTop = (picksRow() ? WEATHER_BELOW + busRow() : CARDS_TOP + busRow()) * k, split = left + (right - left) * 0.585f;
         boolean wx = Prefs.weather(), qt = Prefs.quotes() && HomeData.active().length > 0;
         // A card that is off gives its room to the other one.
         weatherCard.set(left, cardsTop, qt ? split - 16 * k : right, cardsTop + CARDS_H * k);
@@ -2310,6 +2363,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         hourTemp.setColor(drawerInk(0.95f));
         dayLow.setColor(tone(L_DIM, 0xADFFFFFF));
         pricePaint.setColor(drawerInk(0.95f));
+        // With the buses in focus, the rows around them fade back (the row has no ring: its header shows the focus).
+        int dim = busFocused ? c.saveLayerAlpha(0, 0, getWidth(), (BUS_ROW_TITLE - 48) * k, BUS_DIM) : -1;
         float titleBase = (BOARD ? ROW_TITLE - 8 : ROW_TITLE) * k;
         if (drawerInputs > 0) c.drawText(Ui.tr("Inputs"), drawerRects[0].left + 4 * k, titleBase, rowTitle);
         if (drawerInputs < drawerItems.size()) c.drawText(Ui.tr("Shortcuts"), drawerRects[drawerInputs].left + 4 * k, titleBase, rowTitle);
@@ -2317,16 +2372,20 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         for (int i = 0; i < drawerItems.size(); i++) if (drawerFocus[i].value > 0.02f && (top < 0 || drawerFocus[i].value > drawerFocus[top].value)) top = i;
         for (int i = 0; i < drawerItems.size(); i++) if (i != top) drawDrawerTile(c, i);
         if (top >= 0) drawDrawerTile(c, top);
+        if (dim >= 0) c.restoreToCount(dim);
+        if (busRow() > 0) drawBusRow(c);
+        dim = busFocused ? c.saveLayerAlpha(0, (BUS_ROW_TOP + 2 * BUS_H + BUS_GAP + 16) * k, getWidth(), 2200 * k, BUS_DIM) : -1;
         if (picksRow()) drawPicksRow(c);
         if (Prefs.weather()) drawWeatherCard(c, weatherCard);
         if (Prefs.quotes() && HomeData.active().length > 0) drawQuotesCard(c, quotesCard);
+        if (dim >= 0) c.restoreToCount(dim);
     }
 
     /** The board's picks under the TV sources: the same cards as the old top of the screen, square. */
     private void drawPicksRow(Canvas c) {
         if (cards.isEmpty()) return;
         applyTone();
-        c.drawText(Ui.tr("For You"), MARGIN * k + 4 * k, PICKS_TITLE * k, rowTitle);
+        c.drawText(Ui.tr("For You"), MARGIN * k + 4 * k, (PICKS_TITLE + busRow()) * k, rowTitle);
         layoutCards();
         int top = -1;
         for (int i = 0; i < cardSlots; i++) if (cardFocus[i].value > 0.02f && (top < 0 || cardFocus[i].value > cardFocus[top].value)) top = i;
@@ -2549,7 +2608,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         boolean topChanged = aim(topFocus, !sheetOpen && zone == Z_TOP ? topIndex : -1, snap);
         heroChanged |= aim(cardFocus, !sheetOpen && zone == Z_CARDS ? cardIndex : -1, snap) | topChanged;
         // The board's picks are in the drawer: on them, it scrolls up to show the row.
-        float down = BOARD && drawerOpen && zone == Z_CARDS ? 1 : 0;
+        float down = !BOARD || !drawerOpen ? 0 : zone == Z_CARDS ? 1 : zone == Z_BUSES ? BUS_SCROLL / (PICKS_SCROLL + busRow()) : 0;
+        if (zone == Z_BUSES != busFocused) {
+            busFocused = zone == Z_BUSES;
+            drawerDirty = true;
+        }
         if (drawerScroll.target != down) motionDirty = true;
         drawerScroll.target = down;
         if (snap) drawerScroll.snap(down);
@@ -3221,7 +3284,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void back() {
         if (sheetOpen) {
             closeSheet();
-        } else if (zone == Z_DRAWER || zone == WIDGETS || BOARD && zone == Z_CARDS && drawerOpen) {
+        } else if (zone == Z_DRAWER || zone == WIDGETS || zone == Z_BUSES || BOARD && zone == Z_CARDS && drawerOpen) {
             closeDrawer();
             retarget(false);
         } else if (zone != Z_SHELF) {
@@ -3244,9 +3307,25 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 int next = Math.max(0, Math.min(cards.size() - 1, cardIndex + dx));
                 if (next == cardIndex) return;
                 cardIndex = next;
+            } else if (dy < 0 && busRow() > 0) {
+                zone = Z_BUSES;
             } else if (dy < 0) {
                 zone = Z_DRAWER;
                 drawerIndex = nearest(drawerRects, cardRects[Math.min(cardIndex, cardRects.length - 1)].centerX());
+            } else {
+                return;
+            }
+            retarget(false);
+            click.move();
+            return;
+        }
+        if (BOARD && zone == Z_BUSES) {
+            // Up to the sources, Down to the picks; sideways does nothing.
+            if (dy < 0) {
+                zone = Z_DRAWER;
+            } else if (dy > 0 && picksRow() && !cards.isEmpty()) {
+                zone = Z_CARDS;
+                cardIndex = 0;
             } else {
                 return;
             }
@@ -3321,6 +3400,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     drawerIndex = next;
                 } else if (dy < 0) {
                     closeDrawer();
+                } else if (busRow() > 0) {
+                    zone = Z_BUSES;
                 } else if (picksRow() && !cards.isEmpty()) {
                     zone = Z_CARDS;
                     cardIndex = nearest(cardRects, cards.size(), drawerRects[drawerIndex].centerX());
@@ -3383,6 +3464,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         HomeApps.Item it;
         RectF r;
         if (!sheetOpen && zone == WIDGETS) return;   // a widget is only read
+        if (!sheetOpen && zone == Z_BUSES) return;   // the buses are only read
         if (sheetOpen) {
             if (others.isEmpty()) return;
             it = others.get(gridIndex);
@@ -4018,7 +4100,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** The cards side by side: the one at cardIndex wide, the others tall, sliding as `cardOpen` moves. */
     private void layoutCards() {
-        float top = (BOARD ? PICKS_TOP : L_CARDS_TOP) * k, ch = (BOARD ? PICKS_H : L_CARD_H) * k, g = L_CARD_GAP * k;
+        float top = (BOARD ? PICKS_TOP + busRow() : L_CARDS_TOP) * k, ch = (BOARD ? PICKS_H : L_CARD_H) * k, g = L_CARD_GAP * k;
         float tall = (BOARD ? PICKS_TALL : L_TALL_W) * k;
         // The board's row: the wide card in the backdrops' own 16:9, the others the posters' 2:3.
         float wide = BOARD ? ch * 16 / 9 : (CONTENT_R - MARGIN) * k - 2 * tall - 2 * g, x = MARGIN * k - cardScroll.value * (tall + g);
@@ -4818,9 +4900,252 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         lWeather.setColor(ink);
     }
 
+    // MARK: - Buses
+
+    /** 380 px of rows below for the buses once the timetable is in (the picks and the weather move down by it). */
+    private float busRow() {
+        return BOARD && data.buses != null ? BUS_ROW : 0;
+    }
+
+    /**
+     * The next 3 buses to each place and their text, once a minute (the minutes count down between fetches) and when
+     * the live feed or the timetable comes. Amber goes to the place you have to leave for first.
+     */
+    private void updateBuses(boolean force) {
+        Transit.Table t = data.buses;
+        if (!BOARD || t == null || busPlace == null) return;
+        long now = System.currentTimeMillis(), minute = now / 60_000;
+        if (!force && minute == busMinute) return;
+        if (busMinute < 0) layoutDrawer();   // the timetable just came: the rows below make room for it
+        busMinute = minute;
+        Transit.Feed feed = data.busFeed;
+        busSoon = -1;
+        for (int d = 0; d < BUS_PLACES.length; d++) {
+            BusLine b = busLines[d];
+            java.util.List<Transit.Bus> next = Transit.next(t, BUS_PLACES[d], feed, now, 3);
+            b.place = Ui.trf("To {place}", "place", BUS_PLACES[d]);
+            b.shortPlace = Ui.tr(BUS_PLACES[d].replace(" Station", ""));
+            b.n = next.size();
+            b.first = b.n > 0 ? next.get(0).leave : 0;
+            if (b.n == 0) {
+                b.leave = Ui.tr("No buses soon");
+                b.arrive = b.quiet = "";
+                continue;
+            }
+            Transit.Bus first = next.get(0);
+            int in = Transit.minutesTo(first.leave, now);
+            b.leave = in == 0 ? Ui.tr("Leave now") : Ui.trf("Leave {time}", "time", Ui.clock(first.leave));
+            b.arrive = first.arrive == 0 ? "" : Ui.trf("Arrive {time}", "time", Ui.clock(first.arrive));
+            b.quiet = Ui.trf("leave {time} for {place}", "time", Ui.clock(first.leave), "place", b.shortPlace);
+            b.in = in == 0 ? Ui.tr("Leave now") : Ui.trf("Leave in {n} min", "n", in);
+            for (int i = 0; i < b.n; i++) {
+                Transit.Bus x = next.get(i);
+                int m = Transit.minutesTo(x.leave, now);
+                b.route[i] = x.route;
+                b.live[i] = x.live;
+                b.at[i] = Transit.onTimeline(x.leave, now);
+                b.mins[i] = m == 0 ? Ui.tr("now") : Ui.trf("{n} min", "n", m);
+            }
+            if (busSoon < 0 || b.first < busLines[busSoon].first) busSoon = d;
+        }
+        boolean live = feed != null && now - feed.at < Transit.LIVE_FOR;
+        busNote = live ? Ui.trf("Live · updated {time}", "time", Ui.clock(feed.at))
+                : feed != null ? Ui.trf("Timetable · live data from {time}", "time", Ui.clock(feed.at))
+                : Transit.expired(t, now) ? Ui.tr("Timetable out of date") : Ui.tr("Timetable");
+        busNow = Ui.tr("now");
+        busEnd = Ui.trf("{n} min", "n", Transit.WINDOW_MIN);
+        busThen = "  ·  " + Ui.tr("then") + "  ";
+        busNext = Ui.tr("Next bus");
+        busTitle = Ui.tr("Buses");
+        heroDirty = drawerDirty = true;
+        if (busView == Rules.BUS_QUIET) tilesDirty = true;
+    }
+
+    /** The main screen's buses: the timelines in the morning and evening, one line in the day (quiet hours: drawTiles). */
+    private void drawBusesTop(Canvas c) {
+        if (data.buses == null) return;
+        float left = MARGIN * k;
+        if (busView == Rules.BUS_TIMELINES) {
+            for (int d = 0; d < busLines.length; d++) drawBusTimeline(c, busLines[d], left, (BUS_TOP + d * (BUS_H + BUS_GAP)) * k, d == busSoon);
+            c.drawText(busNote, left + (BUS_BAR_X + BUS_BAR_W) * k - busSmall.measureText(busNote), BUS_TOP * k + 24 * k, busSmall);
+        } else if (busView == Rules.BUS_LINE) {
+            drawBusLine(c, left, BUS_LINE_BASE * k);
+        }
+    }
+
+    /** One press down, right after the TV sources: "Buses", then both timelines. */
+    private void drawBusRow(Canvas c) {
+        float left = MARGIN * k;
+        int ink = rowTitle.getColor();
+        // In focus, the header turns into a white pill, the way a selected tab looks: nothing to press, so no ring.
+        if (busFocused) {
+            float h = 50 * k, mid = BUS_ROW_TITLE * k - Ui.halfCap(rowTitle);
+            fill.setShader(null);
+            fill.setColor(WHITE);
+            c.drawRoundRect(left - 16 * k, mid - h / 2, left + 24 * k + rowTitle.measureText(busTitle), mid + h / 2, h / 2, h / 2, fill);
+            rowTitle.setColor(0xFF0B0F17);
+        }
+        c.drawText(busTitle, left + 4 * k, BUS_ROW_TITLE * k, rowTitle);
+        rowTitle.setColor(ink);
+        c.drawText(busNote, left + (BUS_BAR_X + BUS_BAR_W) * k - busSmall.measureText(busNote), BUS_ROW_TITLE * k, busSmall);
+        for (int d = 0; d < busLines.length; d++) drawBusTimeline(c, busLines[d], left, (BUS_ROW_TOP + d * (BUS_H + BUS_GAP)) * k, d == busSoon);
+    }
+
+    /**
+     * One place's timeline: where to, when to leave and arrive, then a bar of the next 45 minutes with a mark for
+     * each bus at its leave time (route above, minutes below; a clock and grey for the timetable's times).
+     */
+    private void drawBusTimeline(Canvas c, BusLine b, float left, float top, boolean soon) {
+        int ink = soon ? BUS_AMBER : WHITE;
+        c.drawText(b.place, left, top + 24 * k, busPlace);
+        busLeave.setColor(ink);
+        c.drawText(b.leave, left, top + 92 * k, busLeave);
+        if (!b.arrive.isEmpty()) c.drawText(b.arrive, left, top + 136 * k, busArrive);
+        float x0 = left + BUS_BAR_X * k, x1 = x0 + BUS_BAR_W * k, bar = top + 76 * k, below = top + 136 * k;
+        fill.setShader(null);
+        fill.setColor(BUS_TRACK);
+        c.drawRect(x0, bar, x1, bar + 10 * k, fill);
+        if (b.n > 0) {
+            fill.setColor(ink);
+            c.drawRect(x0, bar, x0 + (x1 - x0) * b.at[0], bar + 10 * k, fill);
+        }
+        // Notches every 15 minutes, so a mark's place reads without its label.
+        fill.setColor(0x99FFFFFF);
+        for (int m = 15; m < Transit.WINDOW_MIN; m += 15) {
+            float x = x0 + (x1 - x0) * m / Transit.WINDOW_MIN;
+            c.drawRect(x - 1.5f * k, bar - 8 * k, x + 1.5f * k, bar + 18 * k, fill);
+        }
+        if (b.n == 0 || b.at[0] > 0.12f) c.drawText(busNow, x0, below, busSmall);
+        if (b.n == 0 || b.at[b.n - 1] < 0.85f) c.drawText(busEnd, x1 - busSmall.measureText(busEnd), below, busSmall);
+        // Routes first, since they tell the buses apart: above the bar, or under it when the one before is in the way.
+        // Then the minutes under the bar, soonest first, where they still fit (the first bus's are also its Leave line).
+        float chipEnd = -Float.MAX_VALUE;
+        int taken = 0;
+        for (int i = 0; i < b.n; i++) {
+            float x = x0 + (x1 - x0) * b.at[i];
+            fill.setColor(i == 0 ? ink : b.live[i] ? WHITE : BUS_PLAN);
+            c.drawRect(x - 3 * k, top + 62 * k, x + 3 * k, top + 100 * k, fill);
+            float cw = busChipText.measureText(b.route[i]) + 20 * k, cx = x - cw / 2;
+            if (cx >= chipEnd + 8 * k) {
+                drawBusChip(c, b.route[i], cx, top + 22 * k);
+                chipEnd = cx + cw;
+            } else if (busFree(cx, cx + cw, taken)) {
+                drawBusChip(c, b.route[i], cx, top + 104 * k);
+                busTaken[2 * taken] = cx;
+                busTaken[2 * taken++ + 1] = cx + cw;
+            }
+        }
+        for (int i = 0; i < b.n; i++) {
+            float x = x0 + (x1 - x0) * b.at[i];
+            int col = i == 0 ? ink : b.live[i] ? WHITE : BUS_PLAN;
+            busMins.setColor(col);
+            float clock = b.live[i] ? 0 : 30 * k, tw = busMins.measureText(b.mins[i]) + clock;
+            // Kept inside the bar's ends, so a bus leaving now doesn't hang off its left end.
+            float tx = Math.max(x0, Math.min(x1 - tw, x - tw / 2));
+            if (!busFree(tx, tx + tw, taken)) continue;
+            if (!b.live[i]) drawBusClock(c, tx + 11 * k, below - Ui.halfCap(busMins), col);
+            c.drawText(b.mins[i], tx + clock, below, busMins);
+            busTaken[2 * taken] = tx;
+            busTaken[2 * taken++ + 1] = tx + tw;
+        }
+    }
+
+    /** Whether `l` to `r` under the bar keeps clear of the first `n` spans in busTaken. */
+    private boolean busFree(float l, float r, int n) {
+        for (int j = 0; j < n; j++) if (l < busTaken[2 * j + 1] + 14 * k && r > busTaken[2 * j] - 14 * k) return false;
+        return true;
+    }
+
+    /** A route number on TransLink blue; `top` is the chip's top. Returns its width. */
+    private float drawBusChip(Canvas c, String route, float x, float top) {
+        float w = busChipText.measureText(route) + 20 * k;
+        fill.setShader(null);
+        fill.setColor(BUS_CHIP);
+        c.drawRect(x, top, x + w, top + 36 * k, fill);
+        c.drawText(route, x + 10 * k, top + 18 * k + Ui.halfCap(busChipText), busChipText);
+        return w;
+    }
+
+    /** The timetable's mark: a small clock face, centred on (cx, cy). */
+    private void drawBusClock(Canvas c, float cx, float cy, int colour) {
+        float r = 10 * k;
+        busClock.setColor(colour);
+        c.drawCircle(cx, cy, r, busClock);
+        c.drawLine(cx, cy, cx, cy - r * 0.6f, busClock);
+        c.drawLine(cx, cy, cx + r * 0.45f, cy + r * 0.3f, busClock);
+    }
+
+    /** The day's line over the shelf: each place, its first bus with "Leave in 3 min", then the next two in minutes. */
+    private void drawBusLine(Canvas c, float x, float base) {
+        float room = (CONTENT_R - MARGIN) * k, gap = 64 * k;
+        // Three buses a place when they fit, else two.
+        int most = busLineWidth(3) + gap <= room ? 3 : 2;
+        for (int d = 0; d < busLines.length; d++) {
+            BusLine b = busLines[d];
+            if (b.n == 0) continue;
+            c.drawText(b.shortPlace, x, base, busPlace);
+            x += busPlace.measureText(b.shortPlace) + 18 * k;
+            for (int i = 0; i < Math.min(b.n, most); i++) {
+                if (i == 1) {
+                    c.drawText(busThen, x, base, busPlace);
+                    x += busPlace.measureText(busThen);
+                } else if (i > 1) {
+                    c.drawText("  ·  ", x, base, busPlace);
+                    x += busPlace.measureText("  ·  ");
+                }
+                x += drawBusChip(c, b.route[i], x, base - Ui.cap(busMins) / 2 - 18 * k) + 10 * k;
+                Paint p = i == 0 ? busArrive : busMins;
+                p.setColor(i == 0 ? (d == busSoon ? BUS_AMBER : WHITE) : b.live[i] ? WHITE : BUS_PLAN);
+                if (!b.live[i]) {
+                    drawBusClock(c, x + 11 * k, base - Ui.halfCap(p), p.getColor());
+                    x += 30 * k;
+                }
+                String t = i == 0 ? b.in : b.mins[i];
+                c.drawText(t, x, base, p);
+                x += p.measureText(t);
+            }
+            busArrive.setColor(WHITE);
+            x += gap;
+        }
+    }
+
+    /** The day's line's width with `most` buses a place, to choose how many fit. */
+    private int busLineWidth(int most) {
+        float w = 0;
+        for (BusLine b : busLines) {
+            if (b.n == 0) continue;
+            w += busPlace.measureText(b.shortPlace) + 18 * k + busPlace.measureText(busThen);
+            for (int i = 0; i < Math.min(b.n, most); i++) {
+                w += busChipText.measureText(b.route[i]) + 30 * k + (b.live[i] ? 0 : 30 * k) + (i == 0 ? busArrive.measureText(b.in) : busMins.measureText(b.mins[i]));
+                if (i > 1) w += busPlace.measureText("  ·  ");
+            }
+        }
+        return Math.round(w + 64 * k);
+    }
+
+    /** Quiet hours: one bright line over the shelf, "Next bus · leave 9:48 for Edmonds · leave 10:05 for Metrotown". */
+    private void drawBusQuiet(Canvas c) {
+        float x = MARGIN * k, base = BUS_QUIET_BASE * k;
+        busArrive.setColor(WHITE);
+        c.drawText(busNext, x, base, busArrive);
+        x += busArrive.measureText(busNext);
+        for (int d = 0; d < busLines.length; d++) {
+            BusLine b = busLines[d];
+            if (b.n == 0) continue;
+            busArrive.setColor(WHITE);
+            c.drawText("  ·  ", x, base, busArrive);
+            x += busArrive.measureText("  ·  ");
+            busArrive.setColor(d == busSoon ? BUS_AMBER : WHITE);
+            c.drawText(b.quiet, x, base, busArrive);
+            x += busArrive.measureText(b.quiet);
+        }
+        busArrive.setColor(WHITE);
+    }
+
     private void drawClock(Canvas c) {
         if (BOARD) {
             drawBoardTop(c);
+            drawBusesTop(c);
             return;
         }
         float x = MARGIN * k;

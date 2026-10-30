@@ -83,6 +83,17 @@ final class Rules {
         return hour >= 21 || hour < 6;
     }
 
+    static final int BUS_TIMELINES = 0, BUS_LINE = 1, BUS_QUIET = 2;
+
+    /**
+     * How the main screen shows the buses at `hour`: the two timelines in the morning (6 to 11) and the evening (4 to
+     * 9 pm), one line over the shelf in the day, and in quiet hours one bright line, the timelines one press down.
+     */
+    static int busView(int hour) {
+        if (quietHours(hour)) return BUS_QUIET;
+        return hour >= 11 && hour < 16 ? BUS_LINE : BUS_TIMELINES;
+    }
+
     /** Milliseconds since midnight on the TV's clock; `fallback` for 0 (no data). */
     static long timeOfDay(long at, long fallback) {
         if (at == 0) return fallback;
@@ -187,6 +198,16 @@ final class Rules {
             if (n.contains(w)) return true;
         }
         return false;
+    }
+
+    /**
+     * The device a port's label names, to show and remember; "" when it names none: the port's own "HDMI 3", or a
+     * soundbar alone on it (the stick on that port asleep: its saved name stands, the soundbar's isn't saved over it).
+     */
+    static String portDevice(String label, String port) {
+        String name = label.trim();
+        boolean bare = name.equalsIgnoreCase("HDMI " + port) || name.equalsIgnoreCase("HDMI" + port);
+        return bare || soundOnly(name) ? "" : name;
     }
 
     static final int TILE_FIRE = 0, TILE_SWITCH = 1, TILE_OTHER = 2;

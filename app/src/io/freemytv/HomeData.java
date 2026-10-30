@@ -80,6 +80,18 @@ final class HomeData {
                 + "&bbox=%.4f,%.4f,%.4f,%.4f", lon - 0.001, lat - 0.001, lon + 0.001, lat + 0.001);
     }
 
+    /**
+     * TransLink's live feed (GTFS-Realtime, the owner's key): every bus under way in the region, about 1 MB, every
+     * 5 minutes while the board shows. The built-in timetable (assets/buses.txt) shows before it comes and fills gaps.
+     */
+    private static final long BUSES_EVERY = 5 * 60_000L;
+    private static final java.util.Set<String> BUS_STOPS = new java.util.HashSet<>();
+
+    /** The board's buses: only in a build with the owner's TransLink key (their stops). */
+    static boolean busesOn() {
+        return !Config.TRANSLINK_KEY.isEmpty();
+    }
+
     /** An active warning, watch or advisory (statements are left out: the air line already covers smoke). */
     static final class Alert {
         String name;        // "Rainfall warning", as Environment Canada names it
@@ -193,6 +205,11 @@ final class HomeData {
     volatile double aqhi = Double.NaN;
     volatile Alert alert;
     volatile long canadaAt;
+    /** The timetable (null until read, or without buses) and the last live feed (null: none yet). */
+    volatile Transit.Table buses;
+    volatile Transit.Feed busFeed;
+    private volatile boolean fetchingBuses;
+    private volatile long busesAt, busesFailedAt;
     /** The city of the forecast in memory: another process (ScreensaverAlone) can see the city change under it. */
     private volatile String weatherFor = "";
 
@@ -214,15 +231,28 @@ final class HomeData {
                 weatherFor = weatherPlace();
             }
         } catch (Exception ignored) {}
+        if (busesOn()) {
+            io.execute(() -> {
+                try (InputStream in = c.getAssets().open("buses.txt")) {
+                    Transit.Table t = Transit.parse(read(in));
+                    for (Transit.Pair p : t.pairs) BUS_STOPS.add(p.stopId);
+                    buses = t;
+                    notifyListeners();
+                } catch (Exception e) {
+                    AppLog.w("buses: no timetable: " + e.getMessage());
+                }
+            });
+        }
         // As for the picks: a fetch made before the Wi-Fi is up (the TV just started) is tried again when it comes.
         try {
             ConnectivityManager cm = c.getSystemService(ConnectivityManager.class);
             if (cm != null) cm.registerDefaultNetworkCallback(new ConnectivityManager.NetworkCallback() {
                 @Override public void onAvailable(Network network) {
-                    if (pricesFailedAt == 0 && weatherFailedAt == 0 && canadaFailedAt == 0) return;
+                    if (pricesFailedAt == 0 && weatherFailedAt == 0 && canadaFailedAt == 0 && busesFailedAt == 0) return;
                     pricesFailedAt = 0;
                     weatherFailedAt = 0;
                     canadaFailedAt = 0;
+                    busesFailedAt = 0;
                     // Only while a screen shows (it listens): nothing is fetched behind another app.
                     main.postDelayed(() -> { if (!listeners.isEmpty()) refreshIfStale(); }, 2000);
                 }
@@ -293,6 +323,26 @@ final class HomeData {
             });
         }
         if (Prefs.weather()) refreshCanada(now);
+    }
+
+    /** The bus feed when it's stale. Only the home screen asks (the screensaver shows no buses). */
+    void refreshBuses() {
+        long now = System.currentTimeMillis();
+        if (!busesOn() || fetchingBuses || buses == null || (now - busesAt <= BUSES_EVERY && now >= busesAt) || failedRecently(busesFailedAt, now)) return;
+        fetchingBuses = true;
+        io.execute(() -> {
+            try {
+                // The key goes only in the address, and an error never names the address.
+                busFeed = Transit.decode(getBytes("https://gtfsapi.translink.ca/v3/gtfsrealtime?apikey=" + Config.TRANSLINK_KEY, false), BUS_STOPS);
+                busesAt = System.currentTimeMillis();
+                notifyListeners();
+            } catch (Exception e) {
+                busesFailedAt = System.currentTimeMillis();
+                AppLog.w("buses: " + e.getClass().getSimpleName() + (e instanceof IOException && e.getMessage() != null && e.getMessage().startsWith("HTTP") ? " " + e.getMessage() : ""));
+            } finally {
+                fetchingBuses = false;
+            }
+        });
     }
 
     /** Environment Canada's AQHI and alerts: only for a place in Canada (its alerts' box finds nothing elsewhere). */
@@ -481,9 +531,14 @@ final class HomeData {
     }
 
     private static String get(String url) throws IOException {
+        return new String(getBytes(url, true), StandardCharsets.UTF_8);
+    }
+
+    private static byte[] getBytes(String url, boolean redirects) throws IOException {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setConnectTimeout(6000);
         c.setReadTimeout(6000);
+        c.setInstanceFollowRedirects(redirects);
         c.setRequestProperty("User-Agent", "FreeMyTV");
         try {
             if (c.getResponseCode() != 200) throw new IOException("HTTP " + c.getResponseCode());
@@ -492,11 +547,19 @@ final class HomeData {
                 byte[] buffer = new byte[8192];
                 int n;
                 while ((n = in.read(buffer)) > 0) out.write(buffer, 0, n);
-                return out.toString(StandardCharsets.UTF_8.name());
+                return out.toByteArray();
             }
         } finally {
             c.disconnect();
         }
+    }
+
+    private static String read(InputStream in) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int n;
+        while ((n = in.read(buffer)) > 0) out.write(buffer, 0, n);
+        return out.toString(StandardCharsets.UTF_8.name());
     }
 
     /**

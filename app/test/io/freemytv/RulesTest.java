@@ -123,6 +123,10 @@ public final class RulesTest {
         check("the JBL soundbar is sound only", Rules.soundOnly("JBL BAR 5.1"));
         check("the Fire TV Stick isn't", !Rules.soundOnly("Fire TV Stick"));
         check("nor a Switch", !Rules.soundOnly("Nintendo Switch"));
+        eq("the stick's name is kept", "Fire TV Stick", Rules.portDevice(" Fire TV Stick ", "3"));
+        eq("the soundbar alone (stick asleep) names nothing", "", Rules.portDevice("JBL BAR 5.1", "3"));
+        eq("the port's own label names nothing", "", Rules.portDevice("HDMI 3", "3"));
+        eq("nor HDMI3", "", Rules.portDevice("hdmi3", "3"));
         String[] ports = {"1", "2", "3"};
         eq("HDMI 3 on: it wins", 2, Rules.shelfPort(ports, new boolean[] {true, true, true}));
         eq("HDMI 3 off, 1 on: HDMI 1", 0, Rules.shelfPort(ports, new boolean[] {true, true, false}));
@@ -143,6 +147,11 @@ public final class RulesTest {
         check("5 am is quiet", Rules.quietHours(5));
         check("6 am isn't", !Rules.quietHours(6));
         check("8 pm isn't", !Rules.quietHours(20));
+        eq("7 am: the bus timelines", Rules.BUS_TIMELINES, Rules.busView(7));
+        eq("11 am: the bus line", Rules.BUS_LINE, Rules.busView(11));
+        eq("3 pm: the bus line", Rules.BUS_LINE, Rules.busView(15));
+        eq("4 pm: the timelines again", Rules.BUS_TIMELINES, Rules.busView(16));
+        eq("9 pm: quiet", Rules.BUS_QUIET, Rules.busView(21));
         int C = Rules.CLEAR, R = Rules.RAIN, S = Rules.SNOW, D = Rules.CLOUDY;
         int[] from = Rules.precipChange(D, new int[] {D, D, R, R});
         check("dry now, rain in 2 hours: rain from then", from[0] == Rules.STARTS && from[1] == 2 && from[2] == R);

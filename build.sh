@@ -124,6 +124,7 @@ final class Config {
     static final String HIDE_SERVICES = "$(prop hide_services '')";
     static final String THEME = "$(prop theme auto)";
     static final String IMMICH_SERVER = "$(prop immich_server '')";
+    static final String TRANSLINK_KEY = "$(prop translink_key '')";
     static final boolean DISABLE_ASSISTANT = $ASSIST;
     static final boolean SHOW_CRYPTO = $CRYPTO;
     static final boolean HIDE_ANIMATION = $ANIMATION;

@@ -406,3 +406,25 @@ look once this step is built and before buses (step 5) and sports (step 6) fill 
 - The Fire TV tile's name is a wordmark: "fire" with a small raised "tv" (24 px, its top level with the f's).
 - HDMI 3 carries two HDMI-CEC devices on this TV (the JBL BAR 5.1 on ARC and the Fire TV Stick): a port's name
   now prefers a player over a soundbar or receiver (`Rules.soundOnly`).
+
+### Step 5: buses (2026-10-30, on the TV)
+
+- **Owner's calls:** one timeline per place (Edmonds Station, Metrotown), across, on a shared 45-minute scale, with a
+  mark per bus at its leave time and notches every 15 minutes; "Leave 7:49" with "Arrive 7:58" under it; every number
+  in the day line has its unit; the rows below get a Buses stop of their own (the remote can rest there).
+- Timetable: `tools/BusTimetable.java` writes `app/assets/buses.txt` (8 KB) from TransLink's static GTFS: one day of
+  times per day type (weekday, Saturday, Sunday) for the four bus and stop pairs, and the holidays that run another
+  day's buses. Valid to 2027-01-03; run it again on TransLink's next one.
+- Live: TransLink's GTFS-RT every 5 minutes, only while the home screen shows, decoded by hand (`Transit`); a live
+  time replaces its timetable bus (by its delay within 90 s, else the nearest within 4 min). Older than 15 min: all
+  timetable. The key is in `config.properties` only and never logged; no redirects are followed.
+- Views (`Rules.busView`): timelines 6 to 11 am and 4 to 9 pm, one line over the shelf 11 am to 4 pm, one bright line
+  in quiet hours. `adb shell settings put global freemytv_buses 0|1|2` tries one.
+- Crowded buses: a route that would run into the one before goes under the bar; the minutes then fill what room is
+  left there, soonest first (the first bus's time is also its Leave line). Nothing is ever drawn over another label.
+- Focus on the Buses row: no ring (it touched the rows around it, and there's nothing to press), the header turns into
+  a white pill and the rows around it fade to 70%.
+- Fix from the step 4 review: with the Fire TV Stick asleep, the JBL soundbar alone on HDMI 3 named the shelf tile
+  "JBL BAR 5.1" and was saved over the stick's name; a sound-only name now counts as none (`Rules.portDevice`).
+- Tests: 128 checks.
+- Left for step 8: the new strings ("Leave {time}", "Arrive {time}", "Next bus", "Buses", "Timetable"…).

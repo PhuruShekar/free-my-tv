@@ -223,9 +223,8 @@ final class HomeApps {
         if (pick >= 0) {
             Item it = ports.get(pick);
             android.content.SharedPreferences names = c.getSharedPreferences("ports", Context.MODE_PRIVATE);
-            String name = it.label == null ? "" : it.label.trim();
-            boolean bare = name.isEmpty() || name.equalsIgnoreCase("HDMI " + it.number) || name.equalsIgnoreCase("HDMI" + it.number);
-            if (bare) name = names.getString("name" + it.number, "");
+            String name = Rules.portDevice(it.label == null ? "" : it.label, it.number);
+            if (name.isEmpty()) name = names.getString("name" + it.number, "");
             else names.edit().putString("name" + it.number, name).apply();
             it.key = "firetv";
             it.portTile = Rules.portTile(name);
