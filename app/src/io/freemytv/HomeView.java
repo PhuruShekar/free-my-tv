@@ -152,7 +152,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private static final float WEATHER_BELOW = 1300;
     // The buses (808 TV): two timelines, one per place, on the next 45 minutes. In the rows below they come right after
     // the TV sources (BUS_ROW pushes the picks and the weather down); on the main screen at BUS_TOP.
-    private static final float BUS_ROW = 380, BUS_ROW_TITLE = 736, BUS_ROW_TOP = 770, BUS_TOP = 470, BUS_H = 140, BUS_GAP = 20;
+    private static final float BUS_ROW = 430, BUS_ROW_TITLE = 736, BUS_ROW_TOP = 770, BUS_TOP = 470, BUS_H = 140, BUS_GAP = 20;
     private static final int BUS_DIM = 0xB3;   // the rows around the focused buses, at 70%
     private static final float BUS_BAR_X = 576, BUS_BAR_W = 1100, BUS_LINE_BASE = 765, BUS_QUIET_BASE = 826;
     private static final float BUS_SCROLL = 230;   // the drawer scrolls up this much with the buses row in focus
@@ -181,7 +181,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     // is on (the bus timelines then give way to the bus line), and a Sports row of its own under the buses.
     private static final int Z_SPORTS = 11, Z_FANTASY = 12;
     private static final int[] ROW_ZONES = {Z_BUSES, Z_SPORTS, Z_FANTASY};
-    private static final float SPORT_TOP = 470, SPORT_H = 240, SPORT_GAP = 24, SPORT_ROW = 380, SPORT_ROW_H = 290, FANTASY_ROW = 380;
+    private static final float SPORT_TOP = 470, SPORT_H = 240, SPORT_GAP = 24, SPORT_ROW = 430, SPORT_ROW_H = 290, FANTASY_ROW = 430;
     private static final int LIVE_RED = 0xFFE5484D, SPORT_CARD = 0xB80E131D, SPORT_DIM = 0xFFC9D2DF;
     private static final int FORM_W = 0xFF2E7D4F, FORM_D = 0xFF4A5466, FORM_L = 0xFFA23B3E, CREST_OTHER = 0xFF3A4660;
 
