@@ -23,6 +23,7 @@ import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
@@ -108,12 +109,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     // Corner capsule: the height and top offset of the tvOS tab bar (68 and 46).
     private static final float CAPSULE_TOP = 46, CAPSULE_H = 68, BUTTON = 56;
     // Bottom drawer (measured with it open; everything moves up by SHIFT).
-    private static final float SHIFT = 560, ROW_TITLE = 518, ROW_TOP = 540, ROW_H = 126, CARDS_TOP = 708, CARDS_H = 300;
+    private static final float SHIFT = 560, ROW_TITLE = 518, ROW_TOP = 540, ROW_H = 126;
     // "All Apps" sheet.
     private static final int COLUMNS = 5, VISIBLE_ROWS = 3;
     private static final float GRID_W = 300, GRID_H = 169, GRID_GAP = 40, GRID_ROW = 239, GRID_TOP = 196, GRID_RADIUS = 22;
     private static final int SMOKE = 0xFF111113, INK = 0xFF1C1C1E, WHITE = 0xFFF5F5F7;
-    private static final int UP_COLOR = 0xFF30D158, DOWN_COLOR = 0xFFFF453A;
     private static final long TOAST_MS = 6000, FADE_MS = 800;
     /** Blur radii of the shadow and shadowDeep paints (Shadows needs them to draw the same blur on older TVs). */
     private static final float SHADOW_BLUR = 26, DEEP_BLUR = 30;
@@ -147,9 +147,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private static final float QUIET_TEXT = 0.7f, QUIET_TILE = 0.5f;
     private boolean quiet;
     // The picks row under the TV sources (measured with the drawer open, before it scrolls): Down from the sources
-    // scrolls the drawer up by PICKS_SCROLL, so the row and the weather card under it both show.
+    // scrolls the drawer up by PICKS_SCROLL, so the row and the Weather row under it both show.
     private static final float PICKS_TITLE = 736, PICKS_TOP = 766, PICKS_H = 400, PICKS_TALL = 267, PICKS_SCROLL = 634;
-    private static final float WEATHER_BELOW = 1300;
     // The buses (808 TV): two timelines, one per place, on the next 45 minutes. In the rows below they come right after
     // the TV sources (BUS_ROW pushes the picks and the weather down); on the main screen at BUS_TOP.
     private static final float BUS_ROW = 430, BUS_ROW_TITLE = 736, BUS_ROW_TOP = 770, BUS_TOP = 470, BUS_H = 140, BUS_GAP = 20;
@@ -179,9 +178,13 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     // Sports (808 TV): Spurs, the Whitecaps and F1. Cards in the middle of the main screen in the day, or whenever a game
     // is on (the bus timelines then give way to the bus line), and a Sports row of its own under the buses.
-    private static final int Z_SPORTS = 11, Z_FANTASY = 12;
-    private static final int[] ROW_ZONES = {Z_BUSES, Z_SPORTS, Z_FANTASY};
+    private static final int Z_SPORTS = 11, Z_FANTASY = 12, Z_WEATHER = 13;
+    // Down moves through these in order; the picks (Z_CARDS) can be pressed, the others are only read.
+    private static final int[] ROW_ZONES = {Z_BUSES, Z_WEATHER, Z_FANTASY, Z_SPORTS, Z_CARDS};
+    // The rows under the TV sources, in order: Buses, Weather (two cards, WEATHER_H tall), Fantasy, Sports, then the picks.
+    private static final float WEATHER_ROW = 480, WEATHER_H = 360;
     private static final float SPORT_TOP = 470, SPORT_H = 240, SPORT_GAP = 24, SPORT_ROW = 430, SPORT_ROW_H = 290, FANTASY_ROW = 430;
+    private static final int WX_RAIN = 0xFF6CB4FF;
     private static final int LIVE_RED = 0xFFE5484D, SPORT_CARD = 0xB80E131D, SPORT_DIM = 0xFFC9D2DF;
     private static final int FORM_W = 0xFF2E7D4F, FORM_D = 0xFF4A5466, FORM_L = 0xFFA23B3E, CREST_OTHER = 0xFF3A4660;
 
@@ -198,10 +201,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     private final SportCard[] sportCards = {new SportCard(), new SportCard(), new SportCard()};
     private int sportCount;
-    private boolean sportLive, sportFocused, fantasyFocused;
+    private boolean sportLive, sportFocused, fantasyFocused, weatherFocused;
     private long sportMinute = -1;
     private String sportTitle = "", sportNote = "", sportLiveWord = "", sportQuiet = "";
     private Paint sportName, sportSub, sportBig, sportScore, sportCrest, sportPill, sportLine;
+    private Paint wxLab, wxTime, wxTemp, wxDay, wxLow, wxHigh, wxRain, wxDrop;
+    private final Path dropPath = new Path();
     private final Spring drawerScroll = new Spring(0.4f, 0.9f, 0);
 
     private final Activity activity;
@@ -367,7 +372,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private int drawerInputs;          // how many leading items are inputs (the rest are shortcuts)
     private Spring[] drawerFocus = new Spring[0];
     private RectF[] drawerRects = new RectF[0];
-    private final RectF weatherCard = new RectF(), quotesCard = new RectF();
+    private final RectF weatherCard = new RectF();
     private final Spring drawer = new Spring(0.46f, 0.92f, 0);
     private boolean drawerOpen;
     private int drawerIndex;
@@ -427,8 +432,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private Paint labelPaint, metaPaint, clockPaint, buttonPaint, capsuleText, tipPaint, quotePaint, staleQuote;
     private Paint fireName, fireNote, fireSup;
     private String noSignal;
-    private Paint rowTitle, drawerLabel, cardTitle, cardText, cardDim, cardDimRight, bigTemp, hourPaint, hourTemp, dayLow;
-    private Paint pricePaint, changePaint, sheetTitle;
+    private Paint rowTitle, drawerLabel, cardTitle, cardText, cardDim;
+    private Paint sheetTitle;
     private TextPaint titlePaint, gridLabel, toastPaint;
     private final Paint bitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint imagePaint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
@@ -456,15 +461,16 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private float veilAmount = -1;
     private int veilColor;
     private HomeData.Weather textWeather;
-    private long textPricesAt = -1, textMinute = -1;
     private int textPrefs = -1;
     private boolean clock24;
     private String textLanguage;
-    private String weatherTitle, nowTemp, highLow, sunriseText, sunsetText, staleText;
-    private final String[] hourText = new String[6], hourTempText = new String[6];
-    private final String[] dayText = new String[5], dayMaxText = new String[5], dayMinText = new String[5];
-    private boolean textDays;   // the weather card shows the next days (Home Settings → Forecast) and has them
-    private final String[] priceText = new String[HomeData.COINS.length], changeText = new String[HomeData.COINS.length];
+    private String weatherTitle, weatherNote, hoursTitle, daysTitle, sunriseText, sunsetText;
+    // The Weather row: now and the next 7 hours (time, temperature, rain chance), and today with the next 5 days.
+    private final String[] hrTime = new String[8], hrTemp = new String[8], hrRain = new String[8];
+    private final String[] dyName = new String[6], dyLow = new String[6], dyHigh = new String[6];
+    private final float[] dyFrom = new float[6], dyTo = new float[6];   // each day's span on one scale, 0 to 1
+    private final float[] hrRainW = new float[8];   // each rain figure's width, measured when the text is made
+    private int hrCount, dyCount, textDay;
 
     /** What the hero shows: a recommendation or, without any, the date, the time and the weather. */
     private static final class Hero {
@@ -948,7 +954,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         measure(platter, width, Math.round(320 * kk));
         measure(tiles, width, Math.round(270 * kk));
         // On the board it also holds the picks row and the weather card under it (drawerScroll brings them up).
-        measure(drawerLayer, width, Math.round((BOARD ? 1200 + BUS_ROW + SPORT_ROW + FANTASY_ROW : 600) * kk));
+        measure(drawerLayer, width, Math.round((BOARD ? 1200 + BUS_ROW + WEATHER_ROW + SPORT_ROW + FANTASY_ROW : 600) * kk));
         measure(sheetLayer, width, height);
         measure(menuLayer, width, height);
         measure(toastLayer, width, Math.round(220 * kk));   // full width: a toast may sit right of a long title
@@ -1054,6 +1060,27 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         sportCrest = Ui.text(Ui.semibold, 22 * k, WHITE);
         sportPill = Ui.text(Ui.semibold, 20 * k, WHITE);
         sportLine = Ui.numbers(Ui.medium, 26 * k, WHITE);
+        wxLab = Ui.text(Ui.semibold, 22 * k, SPORT_DIM);
+        wxLab.setLetterSpacing(0.1f);
+        wxTime = Ui.numbers(Ui.semibold, 22 * k, SPORT_DIM);
+        wxTime.setTextAlign(Paint.Align.CENTER);
+        wxTemp = Ui.numbers(Ui.displaySemibold, 40 * k, WHITE);
+        wxTemp.setTextAlign(Paint.Align.CENTER);
+        wxDay = Ui.text(Ui.semibold, 24 * k, WHITE);
+        wxLow = Ui.numbers(Ui.medium, 24 * k, SPORT_DIM);
+        wxLow.setTextAlign(Paint.Align.RIGHT);
+        wxHigh = Ui.numbers(Ui.displaySemibold, 24 * k, WHITE);
+        wxHigh.setTextAlign(Paint.Align.RIGHT);
+        wxRain = Ui.numbers(Ui.medium, 22 * k, WX_RAIN);
+        wxDrop = new Paint(Paint.ANTI_ALIAS_FLAG);
+        wxDrop.setColor(WX_RAIN);
+        dropPath.rewind();   // a drop 14 wide and 19 tall, from its tip
+        dropPath.moveTo(7, 0);
+        dropPath.cubicTo(7, 0, 0, 8, 0, 12);
+        dropPath.cubicTo(0, 15.9f, 3.1f, 19, 7, 19);
+        dropPath.cubicTo(10.9f, 19, 14, 15.9f, 14, 12);
+        dropPath.cubicTo(14, 8, 7, 0, 7, 0);
+        dropPath.close();
         busClock = new Paint(Paint.ANTI_ALIAS_FLAG);
         busClock.setStyle(Paint.Style.STROKE);
         busClock.setStrokeWidth(2.2f * k);
@@ -1080,19 +1107,6 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         cardTitle = Ui.text(Ui.semibold, (BOARD ? 28 : 25) * k, 0xB3FFFFFF);
         cardText = Ui.text(Ui.medium, 29 * k, 0xF2FFFFFF);
         cardDim = Ui.numbers(Ui.medium, 23 * k, 0xADFFFFFF);
-        cardDimRight = Ui.text(Ui.medium, 21 * k, 0x99FFFFFF);
-        cardDimRight.setTextAlign(Paint.Align.RIGHT);
-        bigTemp = Ui.numbers(Ui.light, 100 * k, 0xFFFFFFFF);
-        hourPaint = Ui.numbers(Ui.medium, 22 * k, 0xADFFFFFF);
-        hourPaint.setTextAlign(Paint.Align.CENTER);
-        hourTemp = Ui.numbers(Ui.medium, 26 * k, 0xF2FFFFFF);
-        hourTemp.setTextAlign(Paint.Align.CENTER);
-        dayLow = Ui.numbers(Ui.medium, 22 * k, 0xADFFFFFF);
-        dayLow.setTextAlign(Paint.Align.CENTER);
-        pricePaint = Ui.numbers(Ui.medium, 26 * k, 0xF2FFFFFF);
-        pricePaint.setTextAlign(Paint.Align.RIGHT);
-        changePaint = Ui.numbers(Ui.semibold, 21 * k, 0xFFFFFFFF);
-        changePaint.setTextAlign(Paint.Align.CENTER);
         sheetTitle = Ui.text(Ui.displaySemibold, 40 * k, 0xFFFFFFFF);
         sheetTitle.setTextAlign(Paint.Align.CENTER);
         gridLabel = new TextPaint(Ui.text(Ui.medium, 24 * k, 0x99FFFFFF));
@@ -2337,20 +2351,16 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             snap(drawerRects[i]);
             x += tw + gap;
         }
-        float cardsTop = (picksRow() ? WEATHER_BELOW + rows() : CARDS_TOP + rows()) * k, split = left + (right - left) * 0.585f;
-        boolean wx = Prefs.weather(), qt = Prefs.quotes() && HomeData.active().length > 0;
-        // A card that is off gives its room to the other one.
-        weatherCard.set(left, cardsTop, qt ? split - 16 * k : right, cardsTop + CARDS_H * k);
-        quotesCard.set(wx ? split + 16 * k : left, cardsTop, right, cardsTop + CARDS_H * k);
+        float cardsTop = weatherTop() * k;
+        weatherCard.set(left, cardsTop, right, cardsTop + WEATHER_H * k);
         snap(weatherCard);
-        snap(quotesCard);
         // The symbols at their sizes at rest and focused: drawing them never scales one.
         for (HomeApps.Item it : drawerItems) {
             Symbols.warm(getContext(), it.symbol, 34 * k);
             Symbols.warm(getContext(), it.symbol, 34 * k * 1.07f);
         }
-        Symbols.warmWeather(getContext(), 52 * k);
-        Symbols.warmWeather(getContext(), 30 * k);
+        Symbols.warmWeather(getContext(), 34 * k);
+        Symbols.warmWeather(getContext(), 26 * k);
         Symbols.warm(getContext(), "sunrise", 22 * k);
         Symbols.warm(getContext(), "sunset", 22 * k);
         drawerDirty = true;
@@ -2392,24 +2402,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (dk > 0.001f) scene.glass(c, r, radius, SMOKE, 0.4f, 0, 0, 0.02f, 1, dk);
     }
 
-    private void drawerCard(Canvas c, RectF r) {
-        drawerGlass(c, r, BOARD ? 0 : 30 * k, 0.72f, 0x1A000000, 10 * k);
-    }
-
     private void drawDrawer(Canvas c) {
         if (drawerItems.isEmpty()) return;
         rowTitle.setColor(BOARD ? 0xEBFFFFFF : tone(L_DIM, 0xB3FFFFFF));
         cardTitle.setColor(tone(L_DIM, 0xB3FFFFFF));
         cardText.setColor(drawerInk(0.95f));
         cardDim.setColor(tone(L_DIM, 0xADFFFFFF));
-        cardDimRight.setColor(tone(L_FAINT, 0x99FFFFFF));
-        bigTemp.setColor(drawerInk(1));
-        hourPaint.setColor(tone(L_DIM, 0xADFFFFFF));
-        hourTemp.setColor(drawerInk(0.95f));
-        dayLow.setColor(tone(L_DIM, 0xADFFFFFF));
-        pricePaint.setColor(drawerInk(0.95f));
         // With the buses or sports in focus, the rows around them fade back (they have no ring: the header shows it).
-        boolean rowFocus = busFocused || sportFocused || fantasyFocused;
+        boolean rowFocus = busFocused || sportFocused || fantasyFocused || weatherFocused;
         float rowsTop = BUS_ROW_TITLE - 48;
         int dim = dim(c, rowFocus, 0, rowsTop);
         float titleBase = (BOARD ? ROW_TITLE - 8 : ROW_TITLE) * k;
@@ -2425,20 +2425,26 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             drawBusRow(c);
             if (dim >= 0) c.restoreToCount(dim);
         }
-        if (sportRow() > 0) {
-            dim = dim(c, rowFocus && !sportFocused, rowsTop + busRow(), rowsTop + busRow() + sportRow());
-            drawSportsRow(c);
+        float at = rowsTop + busRow();
+        if (weatherRow() > 0) {
+            dim = dim(c, rowFocus && !weatherFocused, at, at + weatherRow());
+            drawWeatherRow(c);
             if (dim >= 0) c.restoreToCount(dim);
         }
+        at += weatherRow();
         if (fantasyRow() > 0) {
-            dim = dim(c, rowFocus && !fantasyFocused, rowsTop + busRow() + sportRow(), rowsTop + rows());
+            dim = dim(c, rowFocus && !fantasyFocused, at, at + fantasyRow());
             drawFantasyRow(c);
             if (dim >= 0) c.restoreToCount(dim);
         }
-        dim = dim(c, rowFocus, rowsTop + rows(), 2600);
+        at += fantasyRow();
+        if (sportRow() > 0) {
+            dim = dim(c, rowFocus && !sportFocused, at, at + sportRow());
+            drawSportsRow(c);
+            if (dim >= 0) c.restoreToCount(dim);
+        }
+        dim = dim(c, rowFocus, rowsTop + rows(), 3600);
         if (picksRow()) drawPicksRow(c);
-        if (Prefs.weather()) drawWeatherCard(c, weatherCard);
-        if (Prefs.quotes() && HomeData.active().length > 0) drawQuotesCard(c, quotesCard);
         if (dim >= 0) c.restoreToCount(dim);
     }
 
@@ -2493,57 +2499,76 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         drawerLabel.setTextSize(23 * k);
     }
 
-    /** Weather for your location: now (large), the next 6 hours or 5 days, and sunrise and sunset. */
-    private void drawWeatherCard(Canvas c, RectF r) {
-        drawerCard(c, r);
-        if (Ui.LEGACY) weatherSnapshot.draw(c, r, drawerCardsKey(), cc -> drawWeather(cc, r));
-        else drawWeather(c, r);
+    /** Top of the Weather row's cards, in board pixels: under the buses. */
+    private float weatherTop() {
+        return BUS_ROW_TOP + busRow();
     }
 
-    private void drawWeather(Canvas c, RectF r) {
+    private float weatherRow() {
+        return BOARD && Prefs.weather() ? WEATHER_ROW : 0;
+    }
+
+    /**
+     * Weather for your location, one press down under the picks: now and the next hours with the chance of rain, today
+     * and the next days on one scale, and sunrise and sunset under the hours.
+     */
+    private void drawWeatherRow(Canvas c) {
         refreshDrawerText();
-        float x = r.left + 34 * k;
-        c.drawText(weatherTitle, x, r.top + 54 * k, cardTitle);
         HomeData.Weather wx = textWeather;
+        float left = MARGIN * k, right = CONTENT_R * k, top = weatherCard.top, h = WEATHER_H * k, title = top - 34 * k;
+        drawRowTitle(c, weatherTitle, left, title, weatherFocused);
         if (Double.isNaN(wx.temp)) {
-            c.drawText(Ui.tr("No weather data right now."), x, r.top + 120 * k, cardDim);
+            c.drawText(Ui.tr("No weather data right now."), left + 4 * k, top + 40 * k, cardDim);
             return;
         }
-        String symbol = Symbols.weather(wx.code, wx.isDay);
-        float sw = Symbols.width(getContext(), symbol, 52 * k);
-        Symbols.draw(getContext(), c, symbol, x + sw / 2, r.top + 132 * k, 52 * k, drawerInk(0.95f));
-        c.drawText(nowTemp, x + sw + 18 * k - Ui.leftBearing(bigTemp, nowTemp), r.top + 170 * k, bigTemp);
-        c.drawText(HomeData.condition(wx.code, wx.isDay), x, r.top + 220 * k, cardText);
-        c.drawText(highLow, x, r.top + 258 * k, cardDim);
-        float split = r.left + 392 * k;
+        c.drawText(weatherNote, left + (BUS_BAR_X + BUS_BAR_W) * k - busSmall.measureText(weatherNote), title, busSmall);
+        float gap = 24 * k, hw = (right - left - gap) * 2 / 3, dl = left + hw + gap, pad = 28 * k;
         fill.setShader(null);
-        fill.setColor(tone(0x1A000000, 0x24FFFFFF));
-        c.drawRoundRect(split - k, r.top + 34 * k, split + k, r.bottom - 34 * k, k, k, fill);
-        float hx = split + 30 * k;
-        if (textDays) {
-            float hw = (r.right - 30 * k - hx) / 5;
-            for (int i = 0; i < wx.days.size() && i < 5; i++) {
-                float hc = hx + hw * (i + 0.5f);
-                c.drawText(dayText[i], hc, r.top + 96 * k, hourPaint);
-                Symbols.draw(getContext(), c, Symbols.weather(wx.dayCode.get(i), true), hc, r.top + 142 * k, 30 * k, drawerInk(0.9f));
-                // The high, then the low dimmed, centered together (closer than the next day, so the pairs read apart).
-                float maxW = hourTemp.measureText(dayMaxText[i]), minW = dayLow.measureText(dayMinText[i]), gap = 6 * k;
-                float left = hc - (maxW + gap + minW) / 2;
-                c.drawText(dayMaxText[i], left + maxW / 2, r.top + 196 * k, hourTemp);
-                c.drawText(dayMinText[i], left + maxW + gap + minW / 2, r.top + 196 * k, dayLow);
-            }
-        } else {
-            float hw = (r.right - 30 * k - hx) / 6;
-            for (int i = 0; i < wx.hours.size() && i < 6; i++) {
-                float hc = hx + hw * (i + 0.5f);
-                c.drawText(hourText[i], hc, r.top + 96 * k, hourPaint);
-                Symbols.draw(getContext(), c, Symbols.weather(wx.hourCode.get(i), wx.hourDay.get(i)), hc, r.top + 142 * k, 30 * k, drawerInk(0.9f));
-                c.drawText(hourTempText[i], hc, r.top + 196 * k, hourTemp);
-            }
+        fill.setColor(SPORT_CARD);
+        c.drawRect(left, top, left + hw, top + h, fill);
+        c.drawRect(dl, top, right, top + h, fill);
+
+        // The hours: the time (now in amber), the symbol, the temperature and the chance of rain.
+        float x0 = left + pad, cw = (hw - 2 * pad) / 8;
+        c.drawText(hoursTitle, x0, top + 46 * k, wxLab);
+        for (int i = 0; i < hrCount; i++) {
+            float cx = x0 + cw * (i + 0.5f);
+            wxTime.setColor(i == 0 ? BUS_AMBER : SPORT_DIM);
+            c.drawText(hrTime[i], cx, top + 100 * k, wxTime);
+            boolean now = i == 0;
+            Symbols.draw(getContext(), c, Symbols.weather(now ? wx.code : wx.hourCode.get(i - 1), now ? wx.isDay : wx.hourDay.get(i - 1)),
+                    cx, top + 148 * k, 34 * k, WHITE);
+            c.drawText(hrTemp[i], cx, top + 224 * k, wxTemp);
+            if (hrRain[i].isEmpty()) continue;
+            float tw = hrRainW[i], dw = 14 * k, total = dw + 7 * k + tw, sx = cx - total / 2;
+            c.save();
+            c.translate(sx, top + 244 * k);
+            c.scale(k, k);
+            c.drawPath(dropPath, wxDrop);
+            c.restore();
+            c.drawText(hrRain[i], sx + dw + 7 * k, top + 262 * k, wxRain);
         }
-        float sx = hx, base = r.top + 258 * k;
-        if (wx.sunrise != 0) sx = sunItem(c, "sunrise", sunriseText, sx, base) + 36 * k;
+        fill.setColor(0x24FFFFFF);
+        c.drawRect(x0, top + 288 * k, left + hw - pad, top + 290 * k, fill);
+        float sx = x0, base = top + 330 * k;
+        if (wx.sunrise != 0) sx = sunItem(c, "sunrise", sunriseText, sx, base) + 48 * k;
         if (wx.sunset != 0) sunItem(c, "sunset", sunsetText, sx, base);
+
+        // The days: a name, the symbol, the low, a bar from the low to the high on one scale, and the high.
+        float l = dl + pad, r = right - pad, barL = l + 214 * k, barR = r - 70 * k, bar = 8 * k;
+        c.drawText(daysTitle, l, top + 46 * k, wxLab);
+        for (int i = 0; i < dyCount; i++) {
+            float base2 = top + (100 + 44 * i) * k, mid = base2 - 9 * k;
+            c.drawText(dyName[i], l, base2, wxDay);
+            Symbols.draw(getContext(), c, Symbols.weather(wx.dayCode.get(i), true), l + 126 * k, mid, 22 * k, WHITE);
+            c.drawText(dyLow[i], barL - 14 * k, base2, wxLow);
+            fill.setColor(0x24FFFFFF);
+            c.drawRect(barL, mid - bar / 2, barR, mid + bar / 2, fill);
+            fill.setColor(0xFFF2F5FA);
+            float from = barL + (barR - barL) * dyFrom[i], to = Math.max(barL + (barR - barL) * dyTo[i], from + 6 * k);
+            c.drawRect(from, mid - bar / 2, to, mid + bar / 2, fill);
+            c.drawText(dyHigh[i], r, base2, wxHigh);
+        }
     }
 
     private void refreshDrawerText() {
@@ -2551,34 +2576,41 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         boolean settings = Prefs.version != textPrefs || !Ui.language.equals(textLanguage);
         textPrefs = Prefs.version;
         textLanguage = Ui.language;
-        if (wx != textWeather || settings) {
+        int day = Sports.daysFrom(0, System.currentTimeMillis());   // the labels ("Today") change at midnight
+        if (wx != textWeather || settings || day != textDay) {
             textWeather = wx;
-            weatherTitle = Prefs.city().isEmpty() ? Ui.tr("Weather") : Prefs.city();
-            nowTemp = HomeData.degrees(wx.temp);
-            highLow = HomeData.highLow(wx, "   ");
-            textDays = Prefs.forecast().equals("days") && !wx.days.isEmpty();   // no days yet (an older forecast, offline): the hours
-            for (int i = 0; textDays && i < wx.days.size() && i < 5; i++) {
-                dayText[i] = HomeData.weekday(wx.days.get(i));
-                dayMaxText[i] = HomeData.degrees(wx.dayMax.get(i));
-                dayMinText[i] = HomeData.degrees(wx.dayMin.get(i));
+            textDay = day;
+            String city = Prefs.city();
+            weatherTitle = city.isEmpty() ? Ui.tr("Weather") : Ui.trf("Weather · {city}", "city", city);
+            weatherNote = data.weatherAt > 0 ? Ui.trf("Updated {time}", "time", Ui.clock(data.weatherAt)) : "";
+            hoursTitle = Ui.tr("Today by the hour").toUpperCase(Ui.locale());
+            daysTitle = Ui.tr("Next days").toUpperCase(Ui.locale());
+            hrCount = Math.min(hrTime.length, 1 + wx.hours.size());
+            for (int i = 0; i < hrCount; i++) {
+                boolean now = i == 0;
+                hrTime[i] = now ? Ui.tr("Now") : HomeData.hour(wx.hours.get(i - 1));
+                hrTemp[i] = HomeData.degrees(now ? wx.temp : wx.hourTemp.get(i - 1));
+                int rain = now ? -1 : wx.hourRain.get(i - 1);   // "now" has none: the hours after it say it
+                hrRain[i] = rain < 0 ? "" : rain + "%";
+                hrRainW[i] = wxRain.measureText(hrRain[i]);
             }
-            for (int i = 0; !textDays && i < wx.hours.size() && i < 6; i++) {
-                hourText[i] = HomeData.hour(wx.hours.get(i));
-                hourTempText[i] = HomeData.degrees(wx.hourTemp.get(i));
+            dyCount = Math.min(dyName.length, wx.days.size());
+            double lo = Double.MAX_VALUE, hi = -Double.MAX_VALUE;
+            for (int i = 0; i < dyCount; i++) {
+                lo = Math.min(lo, wx.dayMin.get(i));
+                hi = Math.max(hi, wx.dayMax.get(i));
             }
-            sunriseText = Ui.trf("Sunrise {time}", "time", Ui.time(wx.sunrise));
-            sunsetText = Ui.trf("Sunset {time}", "time", Ui.time(wx.sunset));
-        }
-        long minute = System.currentTimeMillis() / 60_000;
-        if (data.pricesAt != textPricesAt || minute != textMinute || settings) {
-            textPricesAt = data.pricesAt;
-            textMinute = minute;
-            String stale = HomeData.staleness(data.pricesAt, 5 * 60_000L);
-            staleText = stale.isEmpty() ? Ui.tr("24h change") : Ui.trf("quotes|{ago}", "ago", stale);
-            for (int i = 0; i < HomeData.COINS.length; i++) {
-                priceText[i] = HomeData.brl(data.prices[i]);
-                changeText[i] = HomeData.change(data.changes[i]);
+            long today = System.currentTimeMillis();
+            for (int i = 0; i < dyCount; i++) {
+                long at = wx.days.get(i);
+                dyName[i] = Sports.daysFrom(today, at) == 0 ? Ui.tr("Today") : HomeData.weekday(at);
+                dyLow[i] = HomeData.degrees(wx.dayMin.get(i));
+                dyHigh[i] = HomeData.degrees(wx.dayMax.get(i));
+                dyFrom[i] = Rules.share(wx.dayMin.get(i), lo, hi);
+                dyTo[i] = Rules.share(wx.dayMax.get(i), lo, hi);
             }
+            sunriseText = Ui.time(wx.sunrise);
+            sunsetText = Ui.time(wx.sunset);
         }
     }
 
@@ -2587,76 +2619,6 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         Symbols.draw(getContext(), c, symbol, x + sw / 2, base - Ui.halfCap(cardDim), size, tone(L_DIM, 0xB3FFFFFF));
         c.drawText(label, x + sw + 10 * k, base, cardDim);
         return x + sw + 10 * k + cardDim.measureText(label);
-    }
-
-    /** Prices in the configured currency with the 24 h change (green/red, like Apple's Stocks app). */
-    private void drawQuotesCard(Canvas c, RectF r) {
-        drawerCard(c, r);
-        if (Ui.LEGACY) quotesSnapshot.draw(c, r, drawerCardsKey(), cc -> drawPrices(cc, r));
-        else drawPrices(c, r);
-    }
-
-    /**
-     * What the drawer cards show depends on: the data, the settings, the language, day or night, and the minute (the
-     * sunrise and sunset, "12 min ago").
-     */
-    private String drawerCardsKey() {
-        return data.weatherAt + "|" + data.pricesAt + "|" + Prefs.version + "|" + Ui.language + "|"
-                + Float.floatToIntBits(dark()) + "|" + System.currentTimeMillis() / 60_000;
-    }
-
-    /**
-     * Android 8 to 11: a drawer card's content (its text and symbols, not its glass) kept as a bitmap. The drawer is
-     * redrawn on every frame of its focus animation, and laying that text out again took ~15 ms a frame on a Mi Box 3.
-     */
-    private static final class Snapshot {
-        private Bitmap bitmap;
-        private String key = "";
-
-        void draw(Canvas c, RectF r, String key, Consumer<Canvas> content) {
-            int left = Math.round(r.left), top = Math.round(r.top);
-            int w = Math.max(1, Math.round(r.right) - left), h = Math.max(1, Math.round(r.bottom) - top);
-            if (bitmap == null || bitmap.getWidth() != w || bitmap.getHeight() != h) {
-                bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-                this.key = "";
-            }
-            if (!key.equals(this.key)) {
-                bitmap.eraseColor(0);
-                Canvas cc = new Canvas(bitmap);
-                cc.translate(-left, -top);
-                content.accept(cc);
-                this.key = key;
-            }
-            c.drawBitmap(bitmap, left, top, null);
-        }
-    }
-
-    private final Snapshot weatherSnapshot = new Snapshot(), quotesSnapshot = new Snapshot();
-
-    private void drawPrices(Canvas c, RectF r) {
-        float x = r.left + 34 * k, right = r.right - 34 * k;
-        refreshDrawerText();
-        c.drawText(Ui.tr("Crypto"), x, r.top + 54 * k, cardTitle);
-        c.drawText(staleText, right, r.top + 54 * k, cardDimRight);
-        float cap = Ui.cap(cardText);
-        int[] coins = HomeData.active();
-        for (int j = 0; j < coins.length; j++) {
-            int i = coins[j];
-            float base = r.top + (110 + 52 * j) * k, mid = base - cap / 2;
-            float gw = Glyphs.width(getContext(), HomeData.COINS[i], cap);
-            Glyphs.coin(getContext(), c, HomeData.COINS[i], x + 14 * k, mid, cap, tone(L_DIM, 0xCCFFFFFF));
-            c.drawText(HomeData.coinName(i), x + Math.max(gw, 28 * k) / 2 + 30 * k, base, cardText);
-            c.drawText(priceText[i], right - 128 * k, base, pricePaint);
-            double change = data.changes[i];
-            if (Double.isNaN(change)) continue;
-            int color = change >= 0 ? tone(0xFF248A3D, UP_COLOR) : tone(0xFFD70015, DOWN_COLOR);
-            tmp.set(right - 108 * k, mid - 17 * k, right, mid + 17 * k);
-            fill.setShader(null);
-            fill.setColor(Ui.alpha(color, 0.2f));
-            c.drawRoundRect(tmp, 17 * k, 17 * k, fill);
-            changePaint.setColor(color);
-            c.drawText(changeText[i], tmp.centerX(), mid + Ui.halfCap(changePaint), changePaint);
-        }
     }
 
     // MARK: - Focus
@@ -2676,8 +2638,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         // The board's picks are in the drawer: on them, it scrolls up to show the row.
         float all = PICKS_SCROLL + rows();
         float down = !BOARD || !drawerOpen ? 0 : zone == Z_CARDS ? 1 : zone == Z_BUSES ? BUS_SCROLL / all
-                : zone == Z_SPORTS ? (BUS_SCROLL + busRow()) / all : zone == Z_FANTASY ? (BUS_SCROLL + busRow() + sportRow()) / all : 0;
-        if (zone == Z_BUSES != busFocused || zone == Z_SPORTS != sportFocused || zone == Z_FANTASY != fantasyFocused) {
+                : zone == Z_WEATHER ? (BUS_SCROLL + busRow()) / all : zone == Z_FANTASY ? (BUS_SCROLL + busRow() + weatherRow()) / all
+                : zone == Z_SPORTS ? (BUS_SCROLL + busRow() + weatherRow() + fantasyRow()) / all : 0;
+        if (zone == Z_BUSES != busFocused || zone == Z_SPORTS != sportFocused || zone == Z_FANTASY != fantasyFocused
+                || zone == Z_WEATHER != weatherFocused) {
+            weatherFocused = zone == Z_WEATHER;
             busFocused = zone == Z_BUSES;
             sportFocused = zone == Z_SPORTS;
             fantasyFocused = zone == Z_FANTASY;
@@ -3379,6 +3344,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 cardIndex = next;
             } else if (dy < 0 && nextRow(Z_CARDS, -1) >= 0) {
                 zone = nextRow(Z_CARDS, -1);
+            } else if (dy > 0 && nextRow(Z_CARDS, 1) >= 0) {
+                zone = nextRow(Z_CARDS, 1);
             } else if (dy < 0) {
                 zone = Z_DRAWER;
                 drawerIndex = nearest(drawerRects, cardRects[Math.min(cardIndex, cardRects.length - 1)].centerX());
@@ -3398,9 +3365,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 zone = r >= 0 ? r : Z_DRAWER;
             } else if (r >= 0) {
                 zone = r;
-            } else if (picksRow() && !cards.isEmpty()) {
-                zone = Z_CARDS;
-                cardIndex = 0;
+                if (zone == Z_CARDS) cardIndex = 0;
             } else {
                 return;
             }
@@ -3477,9 +3442,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     closeDrawer();
                 } else if (nextRow(Z_DRAWER, 1) >= 0) {
                     zone = nextRow(Z_DRAWER, 1);
-                } else if (picksRow() && !cards.isEmpty()) {
-                    zone = Z_CARDS;
-                    cardIndex = nearest(cardRects, cards.size(), drawerRects[drawerIndex].centerX());
+                    if (zone == Z_CARDS) cardIndex = nearest(cardRects, cards.size(), drawerRects[drawerIndex].centerX());
                 } else if (talkBack() && !widgets().isEmpty()) {
                     // Only with TalkBack: the widgets are there to be read, and this is how it gets to them.
                     zone = WIDGETS;
@@ -3871,7 +3834,6 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         for (int i = shelfFirst; i < Math.min(shelf.size(), shelfFirst + shelfVisible); i++) out.add(a11yId(Z_SHELF, i));
         for (int i = 0; i < drawerItems.size(); i++) out.add(a11yId(Z_DRAWER, i));
         if (drawerOpen && Prefs.weather()) out.add(a11yId(WIDGETS, 0));
-        if (drawerOpen && Prefs.quotes() && HomeData.active().length > 0) out.add(a11yId(WIDGETS, 1));
     }
 
     private String a11yText(int id) {
@@ -3901,7 +3863,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 }
                 return label(shelf, i);
             case Z_DRAWER: return label(drawerItems, i);
-            case WIDGETS: return i == 0 ? weatherText() : quotesText();
+            case WIDGETS: return weatherText();
             default: return "";
         }
     }
@@ -3955,7 +3917,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 break;
             case WIDGETS:
                 if (!drawerOpen) return false;
-                a11yRect.set(i == 0 ? weatherCard : quotesCard);
+                a11yRect.set(weatherCard);
                 dy = 0;
                 break;
             default:
@@ -3994,12 +3956,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
     }
 
-    /** The drawer's widgets that are on (0 weather, 1 quotes), with the drawer open. */
+    /** The drawer's widgets that are on (just the weather), with the drawer open. */
     private List<Integer> widgets() {
         List<Integer> out = new ArrayList<>();
         if (!drawerOpen) return out;
         if (Prefs.weather()) out.add(0);
-        if (Prefs.quotes() && HomeData.active().length > 0) out.add(1);
         return out;
     }
 
@@ -4103,9 +4064,17 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (Double.isNaN(wx.temp)) return s.append(". ").append(Ui.tr("No weather data right now.")).toString();
         s.append(". ").append(HomeData.degrees(wx.temp)).append(", ").append(HomeData.condition(wx.code, wx.isDay)).append(". ")
                 .append(Ui.trf("High {max}, low {min}.", "max", HomeData.degrees(wx.max), "min", HomeData.degrees(wx.min)));
-        if (Prefs.forecast().equals("days") && !wx.days.isEmpty()) {   // as the card: the hours until there are days
+        if (!wx.hours.isEmpty()) {
             StringBuilder list = new StringBuilder();
-            for (int i = 0; i < wx.days.size() && i < 5; i++) {
+            for (int i = 0; i < wx.hours.size(); i++) {
+                if (i > 0) list.append(", ");
+                list.append(HomeData.hour(wx.hours.get(i))).append(' ').append(HomeData.degrees(wx.hourTemp.get(i)));
+            }
+            s.append(' ').append(Ui.trf("Next hours: {list}.", "list", list));
+        }
+        if (!wx.days.isEmpty()) {
+            StringBuilder list = new StringBuilder();
+            for (int i = 0; i < wx.days.size(); i++) {
                 // "Monday: High 25°, low 18°; Tuesday: …": the whole day ("Sun" and "Sat" are words of their own), and
                 // which number is the high (the sentence's own end dropped).
                 String range = Ui.trf("High {max}, low {min}.", "max", HomeData.degrees(wx.dayMax.get(i)),
@@ -4114,29 +4083,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 list.append(HomeData.weekdayName(wx.days.get(i))).append(": ").append(range);
             }
             s.append(' ').append(Ui.trf("Next days: {list}.", "list", list));
-        } else if (!wx.hours.isEmpty()) {
-            StringBuilder list = new StringBuilder();
-            for (int i = 0; i < wx.hours.size() && i < 6; i++) {
-                if (i > 0) list.append(", ");
-                list.append(HomeData.hour(wx.hours.get(i))).append(' ').append(HomeData.degrees(wx.hourTemp.get(i)));
-            }
-            s.append(' ').append(Ui.trf("Next hours: {list}.", "list", list));
         }
         if (wx.sunrise != 0) s.append(' ').append(Ui.trf("talkback|Sunrise {time}", "time", Ui.time(wx.sunrise))).append('.');
         if (wx.sunset != 0) s.append(' ').append(Ui.trf("Sunset {time}", "time", Ui.time(wx.sunset))).append('.');
-        return s.toString();
-    }
-
-    /** The quotes card as TalkBack reads it: each coin with its price and 24 h change. */
-    private String quotesText() {
-        StringBuilder s = new StringBuilder(Ui.tr("Crypto"));
-        String stale = HomeData.staleness(data.pricesAt, 5 * 60_000L);
-        s.append(", ").append(stale.isEmpty() ? Ui.tr("24h change") : Ui.trf("quotes|{ago}", "ago", stale)).append('.');
-        for (int i : HomeData.active()) {
-            s.append(' ').append(HomeData.coinName(i)).append(' ').append(HomeData.brl(data.prices[i]));
-            if (!Double.isNaN(data.changes[i])) s.append(", ").append(HomeData.change(data.changes[i]));
-            s.append('.');
-        }
         return s.toString();
     }
 
@@ -5082,21 +5031,22 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** The rows between the TV sources and the picks. */
     private float rows() {
-        return busRow() + sportRow() + fantasyRow();
+        return busRow() + weatherRow() + fantasyRow() + sportRow();
     }
 
     private static boolean isRowZone(int z) {
-        return z == Z_BUSES || z == Z_SPORTS || z == Z_FANTASY;
+        return z == Z_BUSES || z == Z_SPORTS || z == Z_FANTASY || z == Z_WEATHER;
     }
 
     private boolean rowShows(int z) {
-        return z == Z_BUSES ? busRow() > 0 : z == Z_SPORTS ? sportRow() > 0 : fantasyRow() > 0;
+        return z == Z_BUSES ? busRow() > 0 : z == Z_SPORTS ? sportRow() > 0 : z == Z_FANTASY ? fantasyRow() > 0
+                : z == Z_CARDS ? picksRow() && !cards.isEmpty() : weatherRow() > 0;
     }
 
-    /** The row above (dir < 0) or below that shows, from a row, the sources (Z_DRAWER) or the picks (Z_CARDS); -1: none. */
+    /** The stop above (dir < 0) or below that shows, from a row, the picks or the sources (Z_DRAWER); -1: none. */
     private int nextRow(int from, int dir) {
-        int i = from == Z_DRAWER ? -1 : from == Z_CARDS ? ROW_ZONES.length : 0;
-        for (int j = 0; from != Z_DRAWER && from != Z_CARDS && j < ROW_ZONES.length; j++) if (ROW_ZONES[j] == from) i = j;
+        int i = from == Z_DRAWER ? -1 : 0;
+        for (int j = 0; from != Z_DRAWER && j < ROW_ZONES.length; j++) if (ROW_ZONES[j] == from) i = j;
         int step = dir < 0 ? -1 : 1;
         for (i += step; i >= 0 && i < ROW_ZONES.length; i += step) if (rowShows(ROW_ZONES[i])) return ROW_ZONES[i];
         return -1;
@@ -5358,7 +5308,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** One press down, under Sports: your two Sleeper games this week and the FPL strip. */
     private void drawFantasyRow(Canvas c) {
-        float left = MARGIN * k, title = (BUS_ROW_TITLE + busRow() + sportRow()) * k, top = (BUS_ROW_TOP + busRow() + sportRow()) * k;
+        float left = MARGIN * k, title = (BUS_ROW_TITLE + busRow() + weatherRow()) * k, top = (BUS_ROW_TOP + busRow() + weatherRow()) * k;
         drawRowTitle(c, fantasyTitle, left, title, fantasyFocused);
         c.drawText(fantasyNote, left + (BUS_BAR_X + BUS_BAR_W) * k - busSmall.measureText(fantasyNote), title, busSmall);
         float w = (CONTENT_R - MARGIN - 2 * SPORT_GAP) / 3 * k, h = SPORT_ROW_H * k;
@@ -5465,7 +5415,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** One press down, under the buses: each team's standing, form, last and next game, and the F1 weekend. */
     private void drawSportsRow(Canvas c) {
-        float left = MARGIN * k, title = (BUS_ROW_TITLE + busRow()) * k, top = (BUS_ROW_TOP + busRow()) * k;
+        float left = MARGIN * k, title = (BUS_ROW_TITLE + busRow() + weatherRow() + fantasyRow()) * k,
+                top = (BUS_ROW_TOP + busRow() + weatherRow() + fantasyRow()) * k;
         drawRowTitle(c, sportTitle, left, title, sportFocused);
         c.drawText(sportNote, left + (BUS_BAR_X + BUS_BAR_W) * k - busSmall.measureText(sportNote), title, busSmall);
         float w = (CONTENT_R - MARGIN - 2 * SPORT_GAP) / 3 * k, h = SPORT_ROW_H * k;

@@ -237,4 +237,14 @@ final class Rules {
         }
         return fallback;
     }
+
+    /** A day (given by its noon at the city) that is over: its last hour has passed. Today and later stay in the forecast. */
+    static boolean dayEnded(long noon, long now) {
+        return noon + 12 * 3600_000L <= now;
+    }
+
+    /** Where `v` falls between `lo` and `hi`, 0 to 1 (the middle when they are the same): a day's bar on the week's scale. */
+    static float share(double v, double lo, double hi) {
+        return hi <= lo ? 0.5f : (float) Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
+    }
 }

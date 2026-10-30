@@ -161,6 +161,15 @@ public final class RulesTest {
         eq("dry all along: nothing to say", Rules.NO_CHANGE, Rules.precipChange(C, new int[] {C, D, C})[0]);
         eq("wet all along: nothing to say", Rules.NO_CHANGE, Rules.precipChange(R, new int[] {R, S})[0]);
         eq("no hours: nothing to say", Rules.NO_CHANGE, Rules.precipChange(R, new int[0])[0]);
+        long noon = 1_000_000_000_000L;
+        check("a day isn't over at its noon", !Rules.dayEnded(noon, noon));
+        check("nor a minute before its last hour ends", !Rules.dayEnded(noon, noon + 12 * 3600_000L - 60_000L));
+        check("it is over at midnight", Rules.dayEnded(noon, noon + 12 * 3600_000L));
+        near("the week's low sits at the start of its bar", 0f, Rules.share(5, 5, 15));
+        near("and the high at the end", 1f, Rules.share(15, 5, 15));
+        near("a day in between", 0.4f, Rules.share(9, 5, 15));
+        near("one temperature all week: the middle", 0.5f, Rules.share(7, 7, 7));
+        near("never outside the bar", 1f, Rules.share(20, 5, 15));
         // The TV's row as Android lists it: Live TV, HDMI 1, HDMI 2, HDMI 3, with the Fire TV Stick on HDMI 3.
         int on = Rules.PORT_ON, live = Rules.LIVE_TV, empty = Rules.PORT_EMPTY;
         eq("sources: HDMI 3, Live TV, HDMI 1, HDMI 2", "[3, 0, 1, 2]",

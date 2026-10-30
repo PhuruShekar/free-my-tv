@@ -486,3 +486,20 @@ look once this step is built and before buses (step 5) and sports (step 6) fill 
   stops on translations. The APK is 0.2 MB smaller.
 - Strings built with `a ? "x" : "y"` inside `Ui.tr` aren't seen by `translate.py`: `where()`, `when()` and the FPL
   subtitle now call it once per text.
+
+### Step 9: weather (2026-10-30, on the TV)
+
+- **One Weather row, second under the sources.** The order is now Buses, Weather, Fantasy, Sports, For You (the picks,
+  last). Same focus as the other rows: a white pill ("Weather · Burnaby") and the rest at 70%. It replaces the old
+  weather card, and the drawer's crypto card is removed (the main screen's ticker and the crypto settings are left).
+- **Today by the hour** (left, two thirds): Now (amber) and the next 7 hours, each with the symbol, the temperature and
+  the chance of rain (blue, with a drop). Under it a line with the sunrise and sunset times.
+- **Next days** (right): today and the next 5, each with a symbol, the low, a bar from low to high on one scale for the
+  week, and the high.
+- **Data:** Open-Meteo's `precipitation_probability` added to the same hourly request (no new source); `days` now
+  includes today and `hours` 7 entries; an older cache without rain just hides the percentages.
+- Home Settings' *Forecast* row is removed on the Android build (the row shows both; the later rows move up one in
+  `SettingsActivity`). LG and Samsung keep theirs for now.
+- TalkBack's weather text lists the hours and the days. New strings: "Weather · {city}", "Today by the hour", "Now",
+  "Today".
+- Tests: 231 checks (`Rules.share`, the bar's scale; `Rules.dayEnded`, which days the forecast keeps). The row itself was checked on the TV.

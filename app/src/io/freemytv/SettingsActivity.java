@@ -921,11 +921,11 @@ public class SettingsActivity extends Activity {
         private static final String[] UNITS = {"auto", "C", "F"}, THEMES = {"auto", "light", "dark"},
                 CLOCKS = {"auto", "24", "12"};
         /** Home Settings: language, temperature, theme, clock, my photos, sounds, top of the screen, picks, Continue
-         *  Watching's apps, watch from the screensaver, Android apps, status icons, weather, city, forecast, now playing,
+         *  Watching's apps, watch from the screensaver, Android apps, status icons, weather, city, now playing,
          *  quotes, one row per coin, then the TMDB key and updates (the last row). */
         private static final int CLOCK_ROW = 3, PHOTOS_ROW = 4, TOP_ROW = 6, PICKS_ROW = 7, WATCH_ROW = 8,
                 SAVER_ROW = 9, ANDROID_APPS_ROW = 10, STATUS_ICONS_ROW = 11, WEATHER_ROW = 12, CITY_ROW = 13,
-                FORECAST_ROW = 14, PLAYING_ROW = 15, QUOTES_ROW = 16, COIN_ROWS = 17;
+                PLAYING_ROW = 14, QUOTES_ROW = 15, COIN_ROWS = 16;
         /** Home Settings rows on screen at once (what fits above the hints at 1080p); a longer list scrolls. */
         private static final int SETTINGS_VISIBLE = 10;
 
@@ -946,10 +946,9 @@ public class SettingsActivity extends Activity {
             l.add(Ui.tr("Continue Watching apps"));
             l.add(Ui.tr("Watch from the screensaver"));
             l.add(Ui.tr("Android apps"));
-            l.add(Ui.tr("Status icons"));   // before the weather widget: City and Forecast are the widget's
+            l.add(Ui.tr("Status icons"));   // before the weather widget: City is the widget's
             l.add(Ui.tr("Weather widget"));
             l.add(Ui.tr("City"));
-            l.add(Ui.tr("Forecast"));
             l.add(Ui.tr("Now Playing widget"));
             l.add(Ui.tr("Quotes widget"));
             l.add("Bitcoin");
@@ -1048,7 +1047,6 @@ public class SettingsActivity extends Activity {
             v[STATUS_ICONS_ROW] = onOff(Prefs.statusIcons());
             v[WEATHER_ROW] = onOff(Prefs.weather());
             v[CITY_ROW] = !cityStatus.isEmpty() ? cityStatus : Prefs.city().isEmpty() ? "—" : Prefs.city();
-            v[FORECAST_ROW] = Prefs.forecast().equals("days") ? Ui.tr("Next days") : Ui.tr("Next hours");
             v[PLAYING_ROW] = onOff(Prefs.nowPlaying());
             v[QUOTES_ROW] = onOff(Prefs.quotes());
             // No quotes widget, nowhere to show prices: the coins read as off (and stay locked) until it is back on.
@@ -1368,9 +1366,6 @@ public class SettingsActivity extends Activity {
                 }
                 case WEATHER_ROW: Prefs.setWeather(!Prefs.weather()); break;
                 case CITY_ROW: return;
-                case FORECAST_ROW:   // both are in memory: nothing to fetch
-                    Prefs.setForecast(Prefs.forecast().equals("days") ? "hours" : "days");
-                    return;
                 case PLAYING_ROW:   // the listener follows the widget: allowed while it's on, taken back when it goes off
                     Prefs.setNowPlaying(!Prefs.nowPlaying());
                     HomeMode.nowPlayingAccess(getContext());
