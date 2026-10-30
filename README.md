@@ -15,6 +15,102 @@ Open source. Built with Claude Code. One button to undo.
 
 </div>
 
+> **This is a fork.** It's [PhuruShekar/free-my-tv](https://github.com/PhuruShekar/free-my-tv), a fork of
+> [simbasjungles/free-my-tv](https://github.com/simbasjungles/free-my-tv), the project this README (and the installer, the
+> screensaver, the LG and Samsung apps and everything under "What you get") comes from. The fork turns the Google TV home
+> screen into a glance board called **808 TV**: buses, weather, sports and fantasy scores on the main screen and in rows
+> under it. Credit for the base goes to its author; see [what's new](#whats-new-in-this-fork) and
+> [how the data gets there](#where-the-data-comes-from).
+
+## What's new in this fork
+
+808 TV is one person's home screen, on a Google TV, so some of it is tied to where they live (Metro Vancouver buses, an
+air-quality station, two football teams). Everything below is Google TV only; the LG and Samsung apps are as upstream. The
+screenshots use made-up teams and bus places (`demo=true`, [below](#try-it-without-your-accounts-demo-mode)).
+
+The main screen changes with the hour of the day (the clock, the weather and the bus line stay; the middle changes):
+
+| | |
+|---|---|
+| <img src=".github/screenshots/day.jpg" alt="Midday: hourly weather in the middle, the weather and fantasy scores on the right, one bus line over the shelf"> | <img src=".github/screenshots/morning.jpg" alt="A live F1 session and the next games as cards over the bus line"> |
+| **11 am to 4 pm.** The hours of the day in the middle, your fantasy teams under the current weather, the next bus for each place in one line over the shelf. | **Sports on.** While a game or an F1 session is on (or starts soon), cards for it take the middle: live score, or the next kickoff and the last result. |
+| <img src=".github/screenshots/quiet.jpg" alt="Quiet hours: a dim sky, one line with the next bus and the live F1 session"> | |
+| **9 pm to 6 am.** Quiet hours: the sky stays still, the tiles dim, and one bright line says when to leave for the next bus. | |
+
+In the mornings (6 to 11) and evenings (4 to 9) the bus line becomes a timeline for each place: a mark for every bus on a
+45-minute scale, with "Leave 7:49" and "Arrive 7:58" beside it.
+
+Below the shelf and the TV sources, the drawer has one row per widget. Down moves from one row to the next; the row you're on
+gets a white pill and the rest fade. Nothing sideways to scroll.
+
+<table>
+<tr>
+<td width="50%"><img src=".github/screenshots/buses.jpg" alt="Buses: Leave now, Arrive 3:23, a timeline with a mark per bus"></td>
+<td width="50%"><img src=".github/screenshots/weather.jpg" alt="Weather: the next 8 hours with rain chance, sunrise and sunset, and the next 5 days on one scale"></td>
+</tr>
+<tr>
+<td><b>Buses.</b> Per place: when to leave (the bus time minus your walk), when you'll arrive, and the next three buses on a shared scale. A clock icon means the time comes from the timetable, no clock means live.</td>
+<td><b>Weather.</b> Today by the hour (temperature and chance of rain), sunrise and sunset, and the next 5 days as bars from low to high on one scale. The sky behind everything follows it: clear, cloudy, rain, storm or snow, day or night.</td>
+</tr>
+<tr>
+<td><img src=".github/screenshots/fantasy.jpg" alt="Fantasy: two NFL matchups and a Fantasy Premier League card"></td>
+<td><img src=".github/screenshots/sports.jpg" alt="Sports: an F1 weekend, and a Premier League and an MLS team with their last five results"></td>
+</tr>
+<tr>
+<td><b>Fantasy.</b> A card per Sleeper team (record, place in the league, this week's score against the opponent's with a bar, last week's result) and a Fantasy Premier League card (gameweek points, your rank in one mini-league with ▲ ▼ =, when the next gameweek starts, and the deadline in amber from 48 hours before).</td>
+<td><b>Sports.</b> Your two football teams (standing, last five results as W/D/L, last and next game) and the F1 weekend: the session on in red, the next in amber, the ones run in grey.</td>
+</tr>
+<tr>
+<td colspan="2"><img src=".github/screenshots/picks.jpg" width="50%" alt="For You: a wide pick and tall posters, with Explore, Movies and Shows tabs"><br><b>For You.</b> Upstream's picks, now the last row: Explore, Movies and Shows tabs (Up from the cards focuses them), the focused pick wide and the others as posters.</td>
+</tr>
+</table>
+
+Also changed: the shelf is centred, the apps' tiles and the cards are square, the first shelf tile is whatever is on HDMI 3
+(named and coloured after the device, "fire tv" for a Fire TV Stick), and every on-screen line says 808 TV, with the credit
+to Free My TV on the settings screen. English is the only language (the other catalogues were removed, they stay in git history).
+The design log, with the owner's decisions and a build log per step, is in [`design/home-redesign.md`](design/home-redesign.md).
+
+### Where the data comes from
+
+Every source below is public. Only the TransLink one needs a key. Nothing is fetched unless the home screen is showing
+(the screensaver asks for none of it), and each widget keeps its last good data under an "Updated 3:05" if a fetch fails.
+
+| Widget | Source | How often | What's needed |
+|---|---|---|---|
+| Weather and sky | [Open-Meteo](https://open-meteo.com): forecast, hourly rain chance, sunrise and sunset | every 30 minutes | `latitude`, `longitude`, `city` |
+| Weather alerts, air quality | [Environment Canada](https://api.weather.gc.ca) (no key): alerts at your location, AQHI of one station | every hour | Canada only; the station is `AQHI_STATION` in `HomeData.java` |
+| Buses, timetable | A timetable built into the app (`app/assets/buses.txt`), written by [`tools/BusTimetable.java`](tools/BusTimetable.java) from TransLink's static GTFS file for four bus and stop pairs, and the days that run another day's buses | built at build time, valid until the date in its first line | Edit the pairs in the tool for your stops |
+| Buses, live | [TransLink](https://www.translink.ca/about-us/doing-business-with-translink/app-developer-resources) GTFS-Realtime (a protobuf, decoded by hand in `Transit`): every trip under way in the region, ~1 MB. A live time replaces its timetable bus; older than 15 minutes counts as gone | every 5 minutes | `translink_key` (free, secret, yours) |
+| Sports | ESPN's public site API: each team's page (next game, standing), the league's scoreboard while a game is on, the schedule for the results, and the F1 scoreboard (the whole weekend, with the session on, its lap and the order) | every 30 minutes, every minute while something is on or starts within 15 | Teams are set in `HomeData.TEAMS` (Tottenham, Whitecaps) |
+| Fantasy, NFL | [Sleeper](https://docs.sleeper.com)'s public API: your leagues from your username, rosters, and this week's matchups | every 5 minutes (the leagues and names once an hour) | `sleeper_user` |
+| Fantasy, football | [Fantasy Premier League](https://fantasy.premierleague.com)'s public (unofficial) API: your entry, its mini-leagues, the gameweeks and fixtures | every 5 minutes (the gameweeks once a day) | `fpl_team` (your team id), `fpl_league` (the mini-league to show) |
+
+The settings go in `config.properties` like upstream's (see [`config.example.properties`](config.example.properties)):
+
+```properties
+translink_key=       # buses, live times
+sleeper_user=        # fantasy, NFL
+fpl_team=            # fantasy, football
+fpl_league=          # the mini-league's id
+```
+
+Leave one empty and its widget hides (no buses without the timetable and a key, no fantasy row without a Sleeper user or
+an FPL team); sports and weather always show. The timetable and the live feed are only read for the places in
+`HomeView.BUS_PLACES`.
+
+How the code is split: the plain-Java parts (what a bus time is, which game to show, a fantasy rank's arrow, how many days
+the forecast keeps) are in [`Transit`](app/src/io/freemytv/Transit.java), [`Sports`](app/src/io/freemytv/Sports.java),
+[`SportsFeed`](app/src/io/freemytv/SportsFeed.java), [`Fantasy`](app/src/io/freemytv/Fantasy.java) and
+[`Rules`](app/src/io/freemytv/Rules.java), and `tools/test.sh` checks them on a computer (231 checks, saved ESPN feeds
+included). [`HomeData`](app/src/io/freemytv/HomeData.java) fetches and reads the JSON, and
+[`HomeView`](app/src/io/freemytv/HomeView.java) draws it all on one Canvas, as upstream does.
+
+### Try it without your accounts (demo mode)
+
+`demo=true` in `config.properties` fills the Fantasy row with made-up teams ("Gridiron Gang", "Offside Trap"…), shows the
+timetable's buses (no key needed) under made-up place names, and skips the Sleeper, FPL and TransLink requests. Set `city`,
+`latitude` and `longitude` to any city for the weather. It's how the screenshots above were made.
+
 ## What you get
 
 - **No ads.** No sponsored rows, banners or autoplaying promos. Not one.
@@ -286,7 +382,7 @@ It's your code, and Claude Code finds its way around it. Try:
 - **A safety net.** A watchdog in a separate process brings back the stock home screen after three crashes in five minutes, and a boot check keeps your choice after TV updates.
 - **On LG and Samsung, the same design in plain HTML, CSS and JavaScript** ([`web/`](web)), written for the Chromium of older TVs, with no frameworks. [`webos/build.py`](webos/build.py) packs it with `config.properties` into an `.ipk` without LG's tools, and [`webos/install.py`](webos/install.py) installs it through Developer Mode; on LG it lists and opens apps through the TV's own service bus (Luna), as LG's launcher does. [`tizen/build.py`](tizen/build.py) packs the same app into a Samsung `.wgt`, which uses Tizen's web APIs for the apps and the inputs. To preview it on a computer: `python3 webos/build.py --preview`, then open `out/webos/index.html` (a stand-in lists sample apps).
 - **Continue Watching** reads Android TV's Watch Next list (what apps share about what you're watching). Only picking it grants `READ_TV_LISTINGS` through the TV's ADB; *Original* revokes it. Pictures load only from the TV (`content://`, `android.resource://`), never from the network.
-- **Data** comes only from TMDB (trending titles, new releases and which app streams what in your country), Open-Meteo (forecast, sunrise and sunset), optionally Binance (24-hour prices when `show_crypto=true`), optionally Watchmode (the picks' own pages in their apps, with a `watchmode_key`), optionally your Plex server (with a `plex_url`), optionally your Immich server (your photos, with an `immich_server` and its key) and optionally Trakt (what you're watching and your watchlist, with a `trakt_client_id`, once you sign in on the TV).
+- **Data** comes only from TMDB (trending titles, new releases and which app streams what in your country), Open-Meteo (forecast, sunrise and sunset), and in 808 TV also Environment Canada, ESPN, Sleeper, Fantasy Premier League and TransLink ([the table](#where-the-data-comes-from)), optionally Binance (24-hour prices when `show_crypto=true`), optionally Watchmode (the picks' own pages in their apps, with a `watchmode_key`), optionally your Plex server (with a `plex_url`), optionally your Immich server (your photos, with an `immich_server` and its key) and optionally Trakt (what you're watching and your watchlist, with a `trakt_client_id`, once you sign in on the TV).
 
 | File | What it is |
 |---|---|

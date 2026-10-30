@@ -157,7 +157,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private static final float BUS_BAR_X = 576, BUS_BAR_W = 1100, BUS_LINE_BASE = 765, BUS_QUIET_BASE = 826;
     private static final float BUS_SCROLL = 230;   // the drawer scrolls up this much with the buses row in focus
     private static final int BUS_CHIP = 0xFF2F80ED, BUS_AMBER = 0xFFFFB547, BUS_PLAN = 0xFFC9D2DF, BUS_TRACK = 0x800B0F17;
-    private static final String[] BUS_PLACES = {"Edmonds Station", "Metrotown"};
+    private static final String[] BUS_PLACES = {"Edmonds Station", "Metrotown"}, DEMO_PLACES = {"Central Station", "Harbour Mall"};
 
     /** One place's next 3 buses as drawn: the strings and the marks' places, made once a minute (never in onDraw). */
     private static final class BusLine {
@@ -5023,8 +5023,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         for (int d = 0; d < BUS_PLACES.length; d++) {
             BusLine b = busLines[d];
             java.util.List<Transit.Bus> next = Transit.next(t, BUS_PLACES[d], feed, now, 3);
-            b.place = Ui.trf("To {place}", "place", BUS_PLACES[d]);
-            b.shortPlace = Ui.tr(BUS_PLACES[d].replace(" Station", ""));
+            String name = Config.DEMO ? DEMO_PLACES[d] : BUS_PLACES[d];   // screenshots show made-up places
+            b.place = Ui.trf("To {place}", "place", name);
+            b.shortPlace = Ui.tr(name.replace(" Station", ""));
             b.n = next.size();
             b.first = b.n > 0 ? next.get(0).leave : 0;
             if (b.n == 0) {
