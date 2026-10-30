@@ -469,3 +469,20 @@ look once this step is built and before buses (step 5) and sports (step 6) fill 
 - Tests: 223 checks (FantasyTest 31).
 - Left for step 8: the new strings ("Fantasy", "points", "Week {n} · not started", "GW{n} starts {when}", "Deadline
   {when}"…) and the ordinals ("3rd", English only for now).
+
+### Step 8: empty states and text (2026-10-30, on the TV)
+
+- **Empty and failed states, card by card** (nothing new to draw; each already had its line, one was added):
+  - Buses: no timetable (or no key) hides the row; "No buses soon"; "Timetable out of date"; live data older than 15
+    minutes says "Timetable · live data from {time}".
+  - Sports: before ESPN's first answer the row is hidden; "No games soon" and "No sessions soon" per card; when a fetch
+    fails the last good data stays under its "Updated {time}".
+  - Fantasy: no Sleeper league for the season and no FPL team hides the row; a team with no opponent says "Bye week"
+    (new); the same "Updated {time}".
+- **Text: English only (owner's call).** Translating 60 new strings into 24 languages wasn't worth it, so every catalogue
+  except `en.json` is deleted (they stay in git history). `Ui.languages()` lists only what's in `assets/i18n`, so the
+  language row has one choice and "Automatic" lands on English. `Ui.tr` and the catalogue code stay as they were (a
+  catalogue added later is picked up); `tools/translate.py --check` passes (446 keys) and `tools/check.sh` no longer
+  stops on translations. The APK is 0.2 MB smaller.
+- Strings built with `a ? "x" : "y"` inside `Ui.tr` aren't seen by `translate.py`: `where()`, `when()` and the FPL
+  subtitle now call it once per text.

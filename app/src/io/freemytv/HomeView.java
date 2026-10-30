@@ -5257,7 +5257,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private static String where(Sports.Game g) {
-        return Ui.trf(g.home ? "vs {team}" : "at {team}", "team", g.opp);
+        return g.home ? Ui.trf("vs {team}", "team", g.opp) : Ui.trf("at {team}", "team", g.opp);
     }
 
     /** "Today 3:00 PM", "Tomorrow 10:30 AM", "Sat 10:30 AM", else "Nov 14 12:30 PM". */
@@ -5267,7 +5267,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (d == 0) return Ui.trf("Today {time}", "time", time);
         if (d == 1) return Ui.trf("Tomorrow {time}", "time", time);
         if (d == -1) return Ui.trf("Yesterday {time}", "time", time);
-        String day = Ui.datePattern(d > 1 && d < 7 ? "format|EEE" : "format|MMM d").format(at);
+        String day = d > 1 && d < 7 ? Ui.datePattern("format|EEE").format(at) : Ui.datePattern("format|MMM d").format(at);
         return Ui.trf("{day} {time}", "day", day, "time", time);
     }
 
@@ -5310,7 +5310,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             String record = t.ties > 0 ? t.wins + "–" + t.losses + "–" + t.ties : t.wins + "–" + t.losses;
             c.record = Ui.trf("{record} · {place} of {size}", "record", record, "place", Fantasy.ordinal(t.place), "size", t.size);
             c.started = Fantasy.started(t);
-            c.vs = t.hasOpp ? fit(Ui.trf("vs {team}", "team", t.opp), c.started ? sportSub : sportBig, w - 58 * k) : "";
+            c.vs = t.hasOpp ? fit(Ui.trf("vs {team}", "team", t.opp), c.started ? sportSub : sportBig, w - 58 * k) : Ui.tr("Bye week");
             c.mine = score(t.mine);
             c.theirs = "– " + score(t.theirs);
             c.share = t.mine + t.theirs > 0 ? (float) (t.mine / (t.mine + t.theirs)) : 0.5f;
@@ -5324,7 +5324,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             FanCard c = fanCards[fanCount++];
             c.sleeper = false;
             c.title = fit(fpl.name, sportName, text);
-            c.sub = Ui.trf(fpl.live ? "GW{n} · live" : "GW{n} · final", "n", fpl.gw);
+            c.sub = fpl.live ? Ui.trf("GW{n} · live", "n", fpl.gw) : Ui.trf("GW{n} · final", "n", fpl.gw);
             c.pts = String.valueOf(fpl.points);
             c.rankLabel = fit(fpl.league, sportSub, w / 2);
             // While a gameweek runs, the league's rank keeps last week's value (it moves after the last game).
