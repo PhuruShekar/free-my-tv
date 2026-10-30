@@ -74,6 +74,7 @@ final class HomeApps {
         float logoInk;      // fraction of the logo with ink (thin logos are drawn larger, with the same "weight")
         float logoScale = 1; // size tweak by eye (compact logos need more)
         boolean connected = true;
+        int portTile = Rules.TILE_OTHER;   // the HDMI 3 tile's look (Rules.portTile), worked out once
 
         void setTile(Bitmap b) {
             tile = b;
@@ -199,7 +200,42 @@ final class HomeApps {
             }
             items.add(it);
         }
+        Item fire = fireTv(c);
+        if (fire != null) items.add(0, fire);
         return items;
+    }
+
+    /**
+     * The shelf's first tile: the HDMI port that's on, HDMI 3 first, then 1, then 2 (Rules.shelfPort), named and
+     * coloured after what's on it (the Fire TV Stick, a Switch, anything else; Rules.portTile). With nothing on, HDMI 3
+     * dimmed: OK can wake the stick over HDMI-CEC. A device asleep may not give its name, so the last one is kept.
+     */
+    private static Item fireTv(Context c) {
+        if (HomeMode.AMAZON) return null;
+        List<Item> ports = inputs(c, true);
+        String[] numbers = new String[ports.size()];
+        boolean[] on = new boolean[ports.size()];
+        for (int i = 0; i < numbers.length; i++) {
+            numbers[i] = ports.get(i).number;
+            on[i] = ports.get(i).connected;
+        }
+        int pick = Rules.shelfPort(numbers, on);
+        if (pick >= 0) {
+            Item it = ports.get(pick);
+            android.content.SharedPreferences names = c.getSharedPreferences("ports", Context.MODE_PRIVATE);
+            String name = Rules.portDevice(it.label == null ? "" : it.label, it.number);
+            if (name.isEmpty()) name = names.getString("name" + it.number, "");
+            else names.edit().putString("name" + it.number, name).apply();
+            it.key = "firetv";
+            it.portTile = Rules.portTile(name);
+            it.label = Rules.portTileName(name, it.number);
+            return it;
+        }
+        return null;
+    }
+
+    static boolean isFireTv(Item it) {
+        return "firetv".equals(it.key);
     }
 
     private static String[] known(String pkg) {
@@ -392,7 +428,10 @@ final class HomeApps {
                 if (info.getParentId() == null) {
                     list.add(info);
                 } else {
-                    devices.put(info.getParentId(), String.valueOf(info.loadLabel(c)).trim());
+                    // Two devices on one port (a soundbar on ARC and the stick through it): the player's name wins.
+                    String name = String.valueOf(info.loadLabel(c)).trim();
+                    String had = devices.get(info.getParentId());
+                    if (had == null || Rules.soundOnly(had) && !Rules.soundOnly(name)) devices.put(info.getParentId(), name);
                 }
             }
         } catch (RuntimeException e) {
@@ -401,12 +440,9 @@ final class HomeApps {
         Collections.sort(list, (a, b) -> a.getId().compareTo(b.getId()));
         // Allwinner's live TV player (HY300 and HY320 projectors) is the only way to the HDMI input on those boards.
         boolean allwinner = allwinnerInputs(c);
-        Pattern digit = Pattern.compile("(\\d)");
         for (int i = 0; i < list.size(); i++) {
             TvInputInfo info = list.get(i);
-            int number = i + 1;
-            Matcher m = digit.matcher(String.valueOf(info.loadLabel(c)));
-            if (m.find()) number = Integer.parseInt(m.group(1));
+            int number = Rules.portNumber(String.valueOf(info.loadLabel(c)), i + 1);
             // TCL TVs report "connected standby" for every port, with or without a device; only truly "connected"
             // (a device that is on and sending a signal) makes the input show up.
             int state = TvInputManager.INPUT_STATE_DISCONNECTED;
@@ -547,7 +583,7 @@ final class HomeApps {
         synchronized (HomeApps.class) {
             TILES.keySet().removeIf(k -> k.contains(".") && !seen.contains(k));
         }
-        items.add(special(c, SETTINGS, "freemytv-settings", "Free My TV", "sparkles"));
+        items.add(special(c, SETTINGS, "freemytv-settings", Ui.NAME, "sparkles"));
         return items;
     }
 

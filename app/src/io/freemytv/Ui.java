@@ -132,15 +132,23 @@ final class Ui {
     /** The text for this English key in the current language (the English itself when there is none). */
     static String tr(String english) {
         String s = catalogue.get(english);
-        if (s != null) return s;
-        if (english.indexOf('|') < 0) return english;
+        if (s != null) return named(s);
+        if (english.indexOf('|') < 0) return named(english);
         String plain = CONTEXT_FREE.get(english);
         if (plain == null) {
             plain = english.substring(english.indexOf('|') + 1);
             CONTEXT_FREE.put(english, plain);
         }
         s = catalogue.get(plain);
-        return s != null ? s : plain;
+        return named(s != null ? s : plain);
+    }
+
+    /** The app's name on screen. The text and catalogues keep upstream's "Free My TV", so merges stay easy. */
+    static final String NAME = "808 TV";
+    private static final String UPSTREAM_NAME = "Free My TV";
+
+    private static String named(String s) {
+        return s.indexOf(UPSTREAM_NAME) < 0 ? s : s.replace(UPSTREAM_NAME, NAME);
     }
 
     /** A pattern with named placeholders, filled from name/value pairs: trf("{n} min ago", "n", 12). */
@@ -337,13 +345,17 @@ final class Ui {
         p.setTypeface(face);
         p.setTextSize(size);
         p.setColor(color);
+        p.setFontFeatureSettings(LETTERS);
         return p;
     }
+
+    /** Inter's alternates that tell l and I apart from across the room: l with a tail, I with serifs. */
+    private static final String LETTERS = "'cv05', 'cv08'";
 
     /** Fixed-width digits (the clock and the prices don't jitter when a digit changes). */
     static Paint numbers(Typeface face, float size, int color) {
         Paint p = text(face, size, color);
-        p.setFontFeatureSettings("'tnum'");
+        p.setFontFeatureSettings("'tnum', " + LETTERS);
         return p;
     }
 
