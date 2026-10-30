@@ -92,7 +92,7 @@ final class HomeData {
 
     /** The board's buses: only in a build with the owner's TransLink key (their stops). */
     static boolean busesOn() {
-        return !Config.TRANSLINK_KEY.isEmpty();
+        return !Config.TRANSLINK_KEY.isEmpty() || Config.DEMO;
     }
 
     /** An active warning, watch or advisory (statements are left out: the air line already covers smoke). */
@@ -344,7 +344,7 @@ final class HomeData {
     /** The bus feed when it's stale. Only the home screen asks (the screensaver shows no buses). */
     void refreshBuses() {
         long now = System.currentTimeMillis();
-        if (!busesOn() || fetchingBuses || buses == null || (now - busesAt <= BUSES_EVERY && now >= busesAt) || failedRecently(busesFailedAt, now)) return;
+        if (!busesOn() || Config.TRANSLINK_KEY.isEmpty() || fetchingBuses || buses == null || (now - busesAt <= BUSES_EVERY && now >= busesAt) || failedRecently(busesFailedAt, now)) return;
         fetchingBuses = true;
         io.execute(() -> {
             try {
@@ -447,7 +447,7 @@ final class HomeData {
 
     /** The Fantasy row: only in a build with the owner's Sleeper username or FPL team. */
     static boolean fantasyOn() {
-        return !Config.SLEEPER_USER.isEmpty() || Config.FPL_TEAM.matches("\\d+");
+        return Config.DEMO || !Config.SLEEPER_USER.isEmpty() || Config.FPL_TEAM.matches("\\d+");
     }
 
     /**
@@ -460,6 +460,13 @@ final class HomeData {
         fetchingFantasy = true;
         io.execute(() -> {
             try {
+                if (Config.DEMO) {
+                    fantasy = demoTeams();
+                    fpl = demoFpl(now);
+                    fantasyAt = System.currentTimeMillis();
+                    notifyListeners();
+                    return;
+                }
                 Fantasy.Team[] sl = Config.SLEEPER_USER.isEmpty() ? new Fantasy.Team[0] : sleeper(now);
                 Fantasy.Fpl f = Config.FPL_TEAM.matches("\\d+") ? fpl(now) : null;
                 fantasy = sl;
@@ -473,6 +480,53 @@ final class HomeData {
                 fetchingFantasy = false;
             }
         });
+    }
+
+    /** Made-up teams for screenshots (demo=true in config.properties). */
+    private static Fantasy.Team[] demoTeams() {
+        Fantasy.Team a = new Fantasy.Team(), b = new Fantasy.Team();
+        a.league = "Sunday League";
+        a.name = "Gridiron Gang";
+        a.opp = "Fourth and Long";
+        a.wins = 6;
+        a.losses = 2;
+        a.place = 2;
+        a.size = 10;
+        a.week = 9;
+        a.mine = 104.6;
+        a.theirs = 88.2;
+        a.hasOpp = a.hasLast = true;
+        a.lastMine = 121.4;
+        a.lastTheirs = 97.0;
+        b.league = "Office Pool";
+        b.name = "Blitz Krieg";
+        b.opp = "Hail Mary";
+        b.wins = 4;
+        b.losses = 4;
+        b.place = 5;
+        b.size = 8;
+        b.week = 9;
+        b.mine = 67.3;
+        b.theirs = 91.8;
+        b.hasOpp = b.hasLast = true;
+        b.lastMine = 88.5;
+        b.lastTheirs = 102.1;
+        return new Fantasy.Team[] {a, b};
+    }
+
+    private static Fantasy.Fpl demoFpl(long now) {
+        Fantasy.Fpl f = new Fantasy.Fpl();
+        f.name = "Offside Trap";
+        f.league = "Office League";
+        f.gw = 9;
+        f.points = 61;
+        f.rank = 3;
+        f.lastRank = 5;
+        f.nextGw = 10;
+        f.start = now + 30 * 3600_000L;
+        f.deadline = now + 26 * 3600_000L;
+        f.end = now + 100 * 3600_000L;
+        return f;
     }
 
     private static final String SLEEPER = "https://api.sleeper.app/v1/";

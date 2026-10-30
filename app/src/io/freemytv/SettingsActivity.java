@@ -1242,7 +1242,8 @@ public class SettingsActivity extends Activity {
                     Ui.tr("Prime Video button"), Ui.tr("YouTube button"),
                     Ui.tr("Crunchyroll button"), Ui.tr("Google Play button")};
             return new String[] {Ui.tr("Netflix button"), Ui.tr("YouTube button"),
-                    Ui.tr("Prime Video button"), Ui.tr("TCL Channel button")};
+                    Ui.tr("Prime Video button"), Ui.tr("TCL Channel button"),
+                    Ui.tr("Apple TV button"), Ui.tr("Pluto TV button")};
         }
 
         private String[] keyValues() {
