@@ -84,7 +84,10 @@ final class HomeData {
      * TransLink's live feed (GTFS-Realtime, the owner's key): every bus under way in the region, about 1 MB, every
      * 5 minutes while the board shows. The built-in timetable (assets/buses.txt) shows before it comes and fills gaps.
      */
-    private static final long BUSES_EVERY = 5 * 60_000L;
+    private static final long BUSES_EVERY = 5 * 60_000L, RESULTS_EVERY = 6 * 3600_000L;
+    private static final String ESPN = "https://site.api.espn.com/apis/site/v2/sports/";
+    /** ESPN's league, team id, the board's abbreviation and the league's name. */
+    private static final String[][] TEAMS = {{"soccer/eng.1", "367", "TOT", "Premier League"}, {"soccer/usa.1", "9727", "VAN", "MLS"}};
     private static final java.util.Set<String> BUS_STOPS = new java.util.HashSet<>();
 
     /** The board's buses: only in a build with the owner's TransLink key (their stops). */
@@ -210,6 +213,12 @@ final class HomeData {
     volatile Transit.Feed busFeed;
     private volatile boolean fetchingBuses;
     private volatile long busesAt, busesFailedAt;
+    /** The owner's teams (Spurs, Whitecaps) and the F1 weekend: null until the first fetch. */
+    volatile Sports.Team[] teams;
+    volatile Sports.Weekend f1;
+    volatile long sportsAt;
+    private volatile boolean fetchingSports;
+    private volatile long sportsFailedAt, sportsDue, resultsAt;
     /** The city of the forecast in memory: another process (ScreensaverAlone) can see the city change under it. */
     private volatile String weatherFor = "";
 
@@ -343,6 +352,90 @@ final class HomeData {
                 fetchingBuses = false;
             }
         });
+    }
+
+    /**
+     * The owner's teams and the F1 weekend from ESPN's public feed: every minute while something is on or about to
+     * start, else every half hour; the results (the schedule, up to 470 KB) every 6 hours and when a game ends. Only
+     * the home screen asks.
+     */
+    void refreshSports() {
+        long now = System.currentTimeMillis();
+        if (fetchingSports || (now < sportsDue && now >= sportsAt) || failedRecently(sportsFailedAt, now)) return;
+        fetchingSports = true;
+        io.execute(() -> {
+            try {
+                Sports.Team[] old = teams, t = new Sports.Team[TEAMS.length];
+                Sports.Game[] fin = new Sports.Game[TEAMS.length];
+                boolean ended = false;
+                for (int i = 0; i < TEAMS.length; i++) {
+                    t[i] = new Sports.Team(TEAMS[i][2], TEAMS[i][3]);
+                    JSONObject team = new JSONObject(get(ESPN + TEAMS[i][0] + "/teams/" + TEAMS[i][1])).getJSONObject("team");
+                    t[i].name = team.optString("shortDisplayName");
+                    t[i].standing = team.optString("standingSummary");
+                    JSONArray next = team.optJSONArray("nextEvent");
+                    if (next != null && next.length() > 0) t[i].next = Sports.usable(SportsFeed.game(next.getJSONObject(0), TEAMS[i][1]));
+                    // The team page names the next fixture as soon as a game starts: the game in play is on the scoreboard.
+                    Sports.Game was = old == null ? null : old[i].next;
+                    if (Sports.watching(was, now)) {
+                        Sports.Game g = Sports.usable(scoreboardGame(TEAMS[i], was == null ? now : was.at));
+                        if (g != null && g.state == Sports.IN) t[i].next = g;
+                        else if (g != null && g.state == Sports.POST) fin[i] = g;
+                    }
+                    ended |= was != null && was.state == Sports.IN && (t[i].next == null || t[i].next.state != Sports.IN);
+                }
+                boolean results = old == null || ended || now - resultsAt > RESULTS_EVERY || now < resultsAt;
+                for (int i = 0; i < TEAMS.length; i++) {
+                    if (!results) {
+                        t[i].results.addAll(old[i].results);
+                        Sports.addResult(t[i].results, fin[i]);
+                        continue;
+                    }
+                    JSONArray events = new JSONObject(get(ESPN + TEAMS[i][0] + "/teams/" + TEAMS[i][1] + "/schedule")).getJSONArray("events");
+                    for (int j = 0; j < events.length(); j++) {
+                        Sports.Game g = SportsFeed.game(events.getJSONObject(j), TEAMS[i][1]);
+                        if (g.state == Sports.POST && g.us >= 0 && g.them >= 0) t[i].results.add(g);
+                    }
+                    t[i].results.sort((a, b) -> Long.compare(b.at, a.at));
+                    while (t[i].results.size() > 5) t[i].results.remove(5);
+                    Sports.addResult(t[i].results, fin[i]);
+                }
+                if (results) resultsAt = now;
+                Sports.Weekend w = SportsFeed.weekend(new JSONObject(get(ESPN + "racing/f1/scoreboard")));
+                boolean live = false;
+                long soonest = 0;
+                for (Sports.Team x : t) {
+                    if (x.next == null) continue;
+                    live |= x.next.state == Sports.IN;
+                    if (x.next.state == Sports.PRE && (soonest == 0 || x.next.at < soonest)) soonest = x.next.at;
+                }
+                for (Sports.Session s : w.sessions) {
+                    live |= s.state == Sports.IN;
+                    if (s.state == Sports.PRE && (soonest == 0 || s.at < soonest)) soonest = s.at;
+                }
+                f1 = w;
+                teams = t;
+                sportsAt = System.currentTimeMillis();
+                sportsDue = sportsAt + Sports.every(live, soonest, sportsAt);
+                notifyListeners();
+            } catch (Exception e) {
+                sportsFailedAt = System.currentTimeMillis();
+                AppLog.w("sports: " + e.getClass().getSimpleName() + (e instanceof IOException && e.getMessage() != null && e.getMessage().startsWith("HTTP") ? " " + e.getMessage() : ""));
+            } finally {
+                fetchingSports = false;
+            }
+        });
+    }
+
+    /** The team's game on its league's scoreboard for the day (US Eastern) of `at`, or null. */
+    private static Sports.Game scoreboardGame(String[] team, long at) throws Exception {
+        JSONArray events = new JSONObject(get(ESPN + team[0] + "/scoreboard?dates=" + Sports.etDay(at))).optJSONArray("events");
+        for (int i = 0; events != null && i < events.length(); i++) {
+            JSONObject e = events.getJSONObject(i);
+            JSONArray sides = e.getJSONArray("competitions").getJSONObject(0).getJSONArray("competitors");
+            for (int k = 0; k < sides.length(); k++) if (team[1].equals(sides.getJSONObject(k).optString("id"))) return SportsFeed.game(e, team[1]);
+        }
+        return null;
     }
 
     /** Environment Canada's AQHI and alerts: only for a place in Canada (its alerts' box finds nothing elsewhere). */

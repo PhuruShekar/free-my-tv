@@ -176,6 +176,31 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private Paint busPlace, busLeave, busArrive, busChipText, busMins, busSmall, busClock;
     private final float[] busTaken = new float[12];   // spans under a bar: routes moved down, then minutes
     private boolean busFocused;
+
+    // Sports (808 TV): Spurs, the Whitecaps and F1. Cards in the middle of the main screen in the day, or whenever a game
+    // is on (the bus timelines then give way to the bus line), and a Sports row of its own under the buses.
+    private static final int Z_SPORTS = 11;
+    private static final float SPORT_TOP = 470, SPORT_H = 240, SPORT_GAP = 24, SPORT_ROW = 380, SPORT_ROW_H = 290;
+    private static final int LIVE_RED = 0xFFE5484D, SPORT_CARD = 0xB80E131D, SPORT_DIM = 0xFFC9D2DF;
+    private static final int FORM_W = 0xFF2E7D4F, FORM_D = 0xFF4A5466, FORM_L = 0xFFA23B3E, CREST_OTHER = 0xFF3A4660;
+
+    /** One card as drawn, on the main screen and in the row below: its strings, made once a minute. */
+    private static final class SportCard {
+        String crest = "", oppCrest = "", title = "", sub = "", big = "", tail = "", foot = "", clock = "";
+        String rowTitle = "", rowSub = "", form = "", line1 = "", line2 = "";
+        int bg, ink, accent, sessionCount, sessionNext;
+        boolean live, score, home, today, line2Today;
+        long order;   // live first, then the soonest, then results
+        final String[] sessions = new String[5], sessionWhen = new String[5];
+        final int[] sessionState = new int[5];
+    }
+
+    private final SportCard[] sportCards = {new SportCard(), new SportCard(), new SportCard()};
+    private int sportCount;
+    private boolean sportLive, sportFocused;
+    private long sportMinute = -1;
+    private String sportTitle = "", sportNote = "", sportLiveWord = "", sportQuiet = "";
+    private Paint sportName, sportSub, sportBig, sportScore, sportCrest, sportPill, sportLine;
     private final Spring drawerScroll = new Spring(0.4f, 0.9f, 0);
 
     private final Activity activity;
@@ -659,7 +684,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             wake();
             playing.start();   // the listener allowed after the screen showed (a no-op once watching)
             data.refreshIfStale();
-            if (BOARD) data.refreshBuses();
+            if (BOARD) {
+                data.refreshBuses();
+                data.refreshSports();
+            }
             recs.refreshIfStale();
             checkNotices();
             updatePalette();
@@ -766,7 +794,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         data.addListener(this);
         recs.addListener(this);
         data.refreshIfStale();
-        if (BOARD) data.refreshBuses();
+        if (BOARD) {
+            data.refreshBuses();
+            data.refreshSports();
+        }
         recs.refreshIfStale();
         Photos.importInbox(getContext(), ownReady);   // photos a computer just sent
         ImmichPhotos.syncIfDue(getContext(), ownReady);   // or a new choice from the Immich server, every 6 hours
@@ -883,6 +914,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         updateSky();
         layoutStatus();
         updateBuses(true);
+        updateSports(true);
         heroDirty = statusDirty = drawerDirty = true;
         platter.invalidate();
     }
@@ -912,7 +944,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         measure(platter, width, Math.round(320 * kk));
         measure(tiles, width, Math.round(270 * kk));
         // On the board it also holds the picks row and the weather card under it (drawerScroll brings them up).
-        measure(drawerLayer, width, Math.round((BOARD ? 1200 + BUS_ROW : 600) * kk));
+        measure(drawerLayer, width, Math.round((BOARD ? 1200 + BUS_ROW + SPORT_ROW : 600) * kk));
         measure(sheetLayer, width, height);
         measure(menuLayer, width, height);
         measure(toastLayer, width, Math.round(220 * kk));   // full width: a toast may sit right of a long title
@@ -1011,6 +1043,13 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         busChipText = Ui.numbers(Ui.semibold, 24 * k, WHITE);
         busMins = Ui.numbers(Ui.semibold, 26 * k, WHITE);
         busSmall = Ui.numbers(Ui.medium, 24 * k, 0xFFE4EAF3);
+        sportName = Ui.text(Ui.semibold, 28 * k, WHITE);
+        sportSub = Ui.text(Ui.medium, 22 * k, SPORT_DIM);
+        sportBig = Ui.numbers(Ui.displaySemibold, 52 * k, WHITE);
+        sportScore = Ui.numbers(Ui.displaySemibold, 88 * k, WHITE);
+        sportCrest = Ui.text(Ui.semibold, 22 * k, WHITE);
+        sportPill = Ui.text(Ui.semibold, 20 * k, WHITE);
+        sportLine = Ui.numbers(Ui.medium, 26 * k, WHITE);
         busClock = new Paint(Paint.ANTI_ALIAS_FLAG);
         busClock.setStyle(Paint.Style.STROKE);
         busClock.setStrokeWidth(2.2f * k);
@@ -1181,7 +1220,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void updateMotion() {
         float d = drawer.value, dc = Ui.clamp(d), s = Ui.clamp(sheet.value);
         float home = 1 - s, top = home * (1 - smoothstep(0, 0.32f, dc));
-        float shift = SHIFT * k, scrolled = drawerScroll.value * (PICKS_SCROLL + busRow()) * k;
+        float shift = SHIFT * k, scrolled = drawerScroll.value * (PICKS_SCROLL + rows()) * k;
         float lift = -d * shift - scrolled;
         float dim = quiet ? QUIET_TEXT : 1;
         show(heroLayer, top * dim, lift);
@@ -1263,6 +1302,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             heroDirty = tilesDirty = true;
         }
         updateBuses(false);
+        updateSports(false);
         return true;
     }
 
@@ -2292,7 +2332,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             snap(drawerRects[i]);
             x += tw + gap;
         }
-        float cardsTop = (picksRow() ? WEATHER_BELOW + busRow() : CARDS_TOP + busRow()) * k, split = left + (right - left) * 0.585f;
+        float cardsTop = (picksRow() ? WEATHER_BELOW + rows() : CARDS_TOP + rows()) * k, split = left + (right - left) * 0.585f;
         boolean wx = Prefs.weather(), qt = Prefs.quotes() && HomeData.active().length > 0;
         // A card that is off gives its room to the other one.
         weatherCard.set(left, cardsTop, qt ? split - 16 * k : right, cardsTop + CARDS_H * k);
@@ -2363,8 +2403,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         hourTemp.setColor(drawerInk(0.95f));
         dayLow.setColor(tone(L_DIM, 0xADFFFFFF));
         pricePaint.setColor(drawerInk(0.95f));
-        // With the buses in focus, the rows around them fade back (the row has no ring: its header shows the focus).
-        int dim = busFocused ? c.saveLayerAlpha(0, 0, getWidth(), (BUS_ROW_TITLE - 48) * k, BUS_DIM) : -1;
+        // With the buses or sports in focus, the rows around them fade back (they have no ring: the header shows it).
+        boolean rowFocus = busFocused || sportFocused;
+        float rowsTop = BUS_ROW_TITLE - 48;
+        int dim = dim(c, rowFocus, 0, rowsTop);
         float titleBase = (BOARD ? ROW_TITLE - 8 : ROW_TITLE) * k;
         if (drawerInputs > 0) c.drawText(Ui.tr("Inputs"), drawerRects[0].left + 4 * k, titleBase, rowTitle);
         if (drawerInputs < drawerItems.size()) c.drawText(Ui.tr("Shortcuts"), drawerRects[drawerInputs].left + 4 * k, titleBase, rowTitle);
@@ -2373,19 +2415,33 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         for (int i = 0; i < drawerItems.size(); i++) if (i != top) drawDrawerTile(c, i);
         if (top >= 0) drawDrawerTile(c, top);
         if (dim >= 0) c.restoreToCount(dim);
-        if (busRow() > 0) drawBusRow(c);
-        dim = busFocused ? c.saveLayerAlpha(0, (BUS_ROW_TOP + 2 * BUS_H + BUS_GAP + 16) * k, getWidth(), 2200 * k, BUS_DIM) : -1;
+        if (busRow() > 0) {
+            dim = dim(c, sportFocused, rowsTop, rowsTop + busRow());
+            drawBusRow(c);
+            if (dim >= 0) c.restoreToCount(dim);
+        }
+        if (sportRow() > 0) {
+            dim = dim(c, busFocused, rowsTop + busRow(), rowsTop + rows());
+            drawSportsRow(c);
+            if (dim >= 0) c.restoreToCount(dim);
+        }
+        dim = dim(c, rowFocus, rowsTop + rows(), 2600);
         if (picksRow()) drawPicksRow(c);
         if (Prefs.weather()) drawWeatherCard(c, weatherCard);
         if (Prefs.quotes() && HomeData.active().length > 0) drawQuotesCard(c, quotesCard);
         if (dim >= 0) c.restoreToCount(dim);
     }
 
+    /** Fades what's drawn from `top` to `bottom` (board pixels) to 70% when `on`; returns the save to restore, or -1. */
+    private int dim(Canvas c, boolean on, float top, float bottom) {
+        return on ? c.saveLayerAlpha(0, top * k, getWidth(), bottom * k, BUS_DIM) : -1;
+    }
+
     /** The board's picks under the TV sources: the same cards as the old top of the screen, square. */
     private void drawPicksRow(Canvas c) {
         if (cards.isEmpty()) return;
         applyTone();
-        c.drawText(Ui.tr("For You"), MARGIN * k + 4 * k, (PICKS_TITLE + busRow()) * k, rowTitle);
+        c.drawText(Ui.tr("For You"), MARGIN * k + 4 * k, (PICKS_TITLE + rows()) * k, rowTitle);
         layoutCards();
         int top = -1;
         for (int i = 0; i < cardSlots; i++) if (cardFocus[i].value > 0.02f && (top < 0 || cardFocus[i].value > cardFocus[top].value)) top = i;
@@ -2608,9 +2664,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         boolean topChanged = aim(topFocus, !sheetOpen && zone == Z_TOP ? topIndex : -1, snap);
         heroChanged |= aim(cardFocus, !sheetOpen && zone == Z_CARDS ? cardIndex : -1, snap) | topChanged;
         // The board's picks are in the drawer: on them, it scrolls up to show the row.
-        float down = !BOARD || !drawerOpen ? 0 : zone == Z_CARDS ? 1 : zone == Z_BUSES ? BUS_SCROLL / (PICKS_SCROLL + busRow()) : 0;
-        if (zone == Z_BUSES != busFocused) {
+        float all = PICKS_SCROLL + rows();
+        float down = !BOARD || !drawerOpen ? 0 : zone == Z_CARDS ? 1 : zone == Z_BUSES ? BUS_SCROLL / all
+                : zone == Z_SPORTS ? (BUS_SCROLL + busRow()) / all : 0;
+        if (zone == Z_BUSES != busFocused || zone == Z_SPORTS != sportFocused) {
             busFocused = zone == Z_BUSES;
+            sportFocused = zone == Z_SPORTS;
             drawerDirty = true;
         }
         if (drawerScroll.target != down) motionDirty = true;
@@ -3284,7 +3343,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void back() {
         if (sheetOpen) {
             closeSheet();
-        } else if (zone == Z_DRAWER || zone == WIDGETS || zone == Z_BUSES || BOARD && zone == Z_CARDS && drawerOpen) {
+        } else if (zone == Z_DRAWER || zone == WIDGETS || zone == Z_BUSES || zone == Z_SPORTS || BOARD && zone == Z_CARDS && drawerOpen) {
             closeDrawer();
             retarget(false);
         } else if (zone != Z_SHELF) {
@@ -3307,6 +3366,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 int next = Math.max(0, Math.min(cards.size() - 1, cardIndex + dx));
                 if (next == cardIndex) return;
                 cardIndex = next;
+            } else if (dy < 0 && sportRow() > 0) {
+                zone = Z_SPORTS;
             } else if (dy < 0 && busRow() > 0) {
                 zone = Z_BUSES;
             } else if (dy < 0) {
@@ -3319,10 +3380,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             click.move();
             return;
         }
-        if (BOARD && zone == Z_BUSES) {
-            // Up to the sources, Down to the picks; sideways does nothing.
+        if (BOARD && (zone == Z_BUSES || zone == Z_SPORTS)) {
+            // Rows that are only read: Up and Down go to the row above and below; sideways does nothing.
             if (dy < 0) {
-                zone = Z_DRAWER;
+                zone = zone == Z_SPORTS && busRow() > 0 ? Z_BUSES : Z_DRAWER;
+            } else if (dy > 0 && zone == Z_BUSES && sportRow() > 0) {
+                zone = Z_SPORTS;
             } else if (dy > 0 && picksRow() && !cards.isEmpty()) {
                 zone = Z_CARDS;
                 cardIndex = 0;
@@ -3402,6 +3465,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     closeDrawer();
                 } else if (busRow() > 0) {
                     zone = Z_BUSES;
+                } else if (sportRow() > 0) {
+                    zone = Z_SPORTS;
                 } else if (picksRow() && !cards.isEmpty()) {
                     zone = Z_CARDS;
                     cardIndex = nearest(cardRects, cards.size(), drawerRects[drawerIndex].centerX());
@@ -3464,7 +3529,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         HomeApps.Item it;
         RectF r;
         if (!sheetOpen && zone == WIDGETS) return;   // a widget is only read
-        if (!sheetOpen && zone == Z_BUSES) return;   // the buses are only read
+        if (!sheetOpen && (zone == Z_BUSES || zone == Z_SPORTS)) return;   // the buses and sports are only read
         if (sheetOpen) {
             if (others.isEmpty()) return;
             it = others.get(gridIndex);
@@ -4100,7 +4165,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** The cards side by side: the one at cardIndex wide, the others tall, sliding as `cardOpen` moves. */
     private void layoutCards() {
-        float top = (BOARD ? PICKS_TOP + busRow() : L_CARDS_TOP) * k, ch = (BOARD ? PICKS_H : L_CARD_H) * k, g = L_CARD_GAP * k;
+        float top = (BOARD ? PICKS_TOP + rows() : L_CARDS_TOP) * k, ch = (BOARD ? PICKS_H : L_CARD_H) * k, g = L_CARD_GAP * k;
         float tall = (BOARD ? PICKS_TALL : L_TALL_W) * k;
         // The board's row: the wide card in the backdrops' own 16:9, the others the posters' 2:3.
         float wide = BOARD ? ch * 16 / 9 : (CONTENT_R - MARGIN) * k - 2 * tall - 2 * g, x = MARGIN * k - cardScroll.value * (tall + g);
@@ -4963,12 +5028,15 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** The main screen's buses: the timelines in the morning and evening, one line in the day (quiet hours: drawTiles). */
     private void drawBusesTop(Canvas c) {
-        if (data.buses == null) return;
         float left = MARGIN * k;
-        if (busView == Rules.BUS_TIMELINES) {
+        if (sportsTop()) drawSportsTop(c);
+        else if (busView == Rules.BUS_QUIET && !sportQuiet.isEmpty()) c.drawText(sportQuiet, left, BUS_LINE_BASE * k, busPlace);
+        if (data.buses == null) return;
+        // With a game on, the timelines give way to the line, so the live card has the middle.
+        if (busView == Rules.BUS_TIMELINES && !sportsTop()) {
             for (int d = 0; d < busLines.length; d++) drawBusTimeline(c, busLines[d], left, (BUS_TOP + d * (BUS_H + BUS_GAP)) * k, d == busSoon);
             c.drawText(busNote, left + (BUS_BAR_X + BUS_BAR_W) * k - busSmall.measureText(busNote), BUS_TOP * k + 24 * k, busSmall);
-        } else if (busView == Rules.BUS_LINE) {
+        } else if (busView != Rules.BUS_QUIET) {
             drawBusLine(c, left, BUS_LINE_BASE * k);
         }
     }
@@ -4976,19 +5044,297 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     /** One press down, right after the TV sources: "Buses", then both timelines. */
     private void drawBusRow(Canvas c) {
         float left = MARGIN * k;
-        int ink = rowTitle.getColor();
-        // In focus, the header turns into a white pill, the way a selected tab looks: nothing to press, so no ring.
-        if (busFocused) {
-            float h = 50 * k, mid = BUS_ROW_TITLE * k - Ui.halfCap(rowTitle);
-            fill.setShader(null);
-            fill.setColor(WHITE);
-            c.drawRoundRect(left - 16 * k, mid - h / 2, left + 24 * k + rowTitle.measureText(busTitle), mid + h / 2, h / 2, h / 2, fill);
-            rowTitle.setColor(0xFF0B0F17);
-        }
-        c.drawText(busTitle, left + 4 * k, BUS_ROW_TITLE * k, rowTitle);
-        rowTitle.setColor(ink);
+        drawRowTitle(c, busTitle, left, BUS_ROW_TITLE * k, busFocused);
         c.drawText(busNote, left + (BUS_BAR_X + BUS_BAR_W) * k - busSmall.measureText(busNote), BUS_ROW_TITLE * k, busSmall);
         for (int d = 0; d < busLines.length; d++) drawBusTimeline(c, busLines[d], left, (BUS_ROW_TOP + d * (BUS_H + BUS_GAP)) * k, d == busSoon);
+    }
+
+    /** A row's name; in focus, a white pill, the way a selected tab looks (nothing to press, so no ring). */
+    private void drawRowTitle(Canvas c, String text, float left, float base, boolean focused) {
+        int ink = rowTitle.getColor();
+        if (focused) {
+            float h = 50 * k, mid = base - Ui.halfCap(rowTitle);
+            fill.setShader(null);
+            fill.setColor(WHITE);
+            c.drawRoundRect(left - 16 * k, mid - h / 2, left + 24 * k + rowTitle.measureText(text), mid + h / 2, h / 2, h / 2, fill);
+            rowTitle.setColor(0xFF0B0F17);
+        }
+        c.drawText(text, left + 4 * k, base, rowTitle);
+        rowTitle.setColor(ink);
+    }
+
+    // MARK: - Sports
+
+    /** 380 px of rows below for sports once ESPN has answered (the picks and the weather move down by it). */
+    private float sportRow() {
+        return BOARD && data.teams != null ? SPORT_ROW : 0;
+    }
+
+    /** The rows between the TV sources and the picks. */
+    private float rows() {
+        return busRow() + sportRow();
+    }
+
+    /** The main screen's cards: in the day, and in the morning and evening while a game is on (not in quiet hours). */
+    private boolean sportsTop() {
+        return sportCount > 0 && (busView == Rules.BUS_LINE || busView == Rules.BUS_TIMELINES && sportLive);
+    }
+
+    /** The cards' text, once a minute and when ESPN answers: live first, then the soonest, then results. */
+    private void updateSports(boolean force) {
+        Sports.Team[] teams = data.teams;
+        Sports.Weekend f1 = data.f1;
+        if (!BOARD || teams == null || sportName == null) return;
+        long now = System.currentTimeMillis(), minute = now / 60_000;
+        if (!force && minute == sportMinute) return;
+        if (sportMinute < 0) layoutDrawer();   // the first answer: the rows below make room
+        sportMinute = minute;
+        sportCount = 0;
+        sportLive = false;
+        sportQuiet = "";
+        for (Sports.Team t : teams) teamCard(sportCards[sportCount++], t, now);
+        if (f1 != null && !f1.sessions.isEmpty()) f1Card(sportCards[sportCount++], f1, now);
+        float full = (CONTENT_R - MARGIN - 2 * SPORT_GAP) / 3 * k - 58 * k;
+        for (int i = 0; i < sportCount; i++) fitCard(sportCards[i], full);
+        java.util.Arrays.sort(sportCards, 0, sportCount, (a, b) -> Long.compare(a.order, b.order));
+        sportTitle = Ui.tr("Sports");
+        sportNote = Ui.trf("Updated {time}", "time", Ui.clock(data.sportsAt));
+        sportLiveWord = Ui.tr("LIVE");
+        heroDirty = drawerDirty = true;
+    }
+
+    /** Cuts a card's text to the card: a long team name would run off it. `full` is the text's room, crest to edge. */
+    private void fitCard(SportCard s, float full) {
+        float named = full - 84 * k;
+        s.title = fit(s.title, sportName, named);
+        s.sub = fit(s.sub, sportSub, named);
+        s.rowTitle = fit(s.rowTitle, sportName, named);
+        s.rowSub = fit(s.rowSub, sportSub, named);
+        s.big = s.score ? s.big : fit(s.big, sportBig, full);
+        s.tail = fit(s.tail, sportName, Math.max(0, full - sportBig.measureText(s.big) - 18 * k));
+        s.foot = fit(s.foot, sportSub, full);
+        s.line1 = fit(s.line1, sportLine, full);
+        s.line2 = fit(s.line2, sportLine, full);
+    }
+
+    /** `s` cut to fit `max` pixels in `p`, ending in "…". Not for onDraw (it measures). */
+    private static String fit(String s, Paint p, float max) {
+        if (p.measureText(s) <= max) return s;
+        int n = s.length();
+        while (n > 1 && p.measureText(s, 0, n) + p.measureText("…") > max) n--;
+        return s.substring(0, n).trim() + "…";
+    }
+
+    private void teamCard(SportCard s, Sports.Team t, long now) {
+        Sports.Game g = Sports.shown(t, now), last = t.results.isEmpty() ? null : t.results.get(0);
+        Sports.Game next = t.next != null && t.next.state != Sports.POST ? t.next : null;
+        crest(s, t.abbr);
+        s.live = s.score = s.today = false;
+        s.tail = s.foot = s.clock = "";
+        s.sessionCount = 0;
+        s.rowTitle = t.name;
+        s.rowSub = t.standing;
+        s.form = Sports.form(t, 5);
+        s.line1 = last == null ? "" : Ui.trf("Last: {score} {where}", "score", score(last), "where", where(last));
+        s.line2 = next == null ? "" : Ui.trf("Next: {team}, {when}", "team", next.opp, "when", when(next.at, now));
+        s.line2Today = next != null && Sports.daysFrom(now, next.at) == 0;
+        if (g == null) {
+            s.title = t.name;
+            s.sub = Ui.tr(t.league);
+            s.big = Ui.tr("No games soon");
+            s.order = Long.MAX_VALUE;
+        } else if (g.state == Sports.IN) {
+            s.live = s.score = true;
+            sportLive = true;
+            s.home = g.home;
+            s.oppCrest = g.oppAbbr;
+            s.title = Ui.tr(t.league);
+            s.clock = g.clock;
+            // As scores are written, the home side first.
+            s.big = g.home ? g.us + " – " + g.them : g.them + " – " + g.us;
+            s.foot = where(g);
+            s.order = Long.MIN_VALUE;
+            if (sportQuiet.isEmpty()) sportQuiet = Ui.trf("{team} {score} {where} · {clock}", "team", t.name, "score", score(g), "where", where(g), "clock", g.clock);
+        } else if (g.state == Sports.POST) {
+            s.title = Sports.daysFrom(now, g.at) == 0 ? Ui.tr("Full time") : Ui.tr("Yesterday · full time");
+            s.sub = Ui.tr(t.league);
+            s.big = score(g);
+            s.tail = where(g);
+            s.foot = s.line2;
+            s.order = Long.MAX_VALUE - 1;
+        } else {
+            s.title = where(g);
+            s.sub = Ui.tr(t.league);
+            s.big = when(g.at, now);
+            s.today = Sports.daysFrom(now, g.at) == 0;
+            s.foot = s.line1;
+            s.order = g.at;
+        }
+    }
+
+    private void f1Card(SportCard s, Sports.Weekend w, long now) {
+        Sports.Session x = Sports.shown(w, now);
+        crest(s, "F1");
+        s.live = s.score = s.today = false;
+        s.tail = s.foot = s.clock = s.form = s.line1 = s.line2 = "";
+        s.rowTitle = s.title = w.name;
+        s.rowSub = Ui.tr("Formula 1");
+        if (x == null) {
+            s.sub = "";
+            s.big = Ui.tr("No sessions soon");
+            s.order = Long.MAX_VALUE;
+        } else if (x.state == Sports.IN) {
+            s.live = true;
+            sportLive = true;
+            s.title = Ui.trf("F1 · {session}", "session", Ui.tr(x.name));
+            s.clock = x.lap > 0 ? Ui.trf("Lap {n}", "n", x.lap) : "";
+            s.big = x.leader.isEmpty() ? w.name : Ui.trf("P1 {driver}", "driver", x.leader);
+            s.foot = w.name;
+            s.order = Long.MIN_VALUE;
+            if (sportQuiet.isEmpty()) sportQuiet = Ui.trf("F1 {session} · P1 {driver}", "session", Ui.tr(x.name), "driver", x.leader);
+        } else if (x.state == Sports.POST) {
+            s.sub = Ui.tr("Race · finished");
+            s.big = x.leader.isEmpty() ? Ui.tr("Race") : Ui.trf("{driver} won", "driver", x.leader);
+            s.order = Long.MAX_VALUE - 1;
+        } else {
+            s.sub = Ui.tr(x.name);
+            s.big = when(x.at, now);
+            s.today = Sports.daysFrom(now, x.at) == 0;
+            Sports.Session then = Sports.after(w, x);
+            s.foot = then == null ? "" : Ui.trf("Then {session}, {when}", "session", Ui.tr(then.name), "when", when(then.at, now));
+            s.order = x.at;
+        }
+        // The row below lists the weekend; the next session in amber, the ones run in grey.
+        s.sessionCount = Math.min(s.sessions.length, w.sessions.size());
+        s.sessionNext = -1;
+        for (int i = 0; i < s.sessionCount; i++) {
+            Sports.Session y = w.sessions.get(i);
+            s.sessions[i] = Ui.tr(y.name);
+            s.sessionWhen[i] = when(y.at, now);
+            s.sessionState[i] = y.state;
+            if (s.sessionNext < 0 && y.state == Sports.PRE) s.sessionNext = i;
+        }
+    }
+
+    /** Each team's crest: its own colours, as small squares with three letters. */
+    private static void crest(SportCard s, String abbr) {
+        s.crest = abbr;
+        s.bg = abbr.equals("TOT") ? 0xFF132257 : abbr.equals("VAN") ? 0xFF00245E : abbr.equals("F1") ? 0xFFE10600 : CREST_OTHER;
+        s.ink = abbr.equals("VAN") ? 0xFF9DC2EA : WHITE;
+        s.accent = abbr.equals("TOT") ? WHITE : abbr.equals("VAN") ? 0xFF9DC2EA : s.bg;
+    }
+
+    /** "2–1" from our side. */
+    private static String score(Sports.Game g) {
+        return g.us + "–" + g.them;
+    }
+
+    private static String where(Sports.Game g) {
+        return Ui.trf(g.home ? "vs {team}" : "at {team}", "team", g.opp);
+    }
+
+    /** "Today 3:00 PM", "Tomorrow 10:30 AM", "Sat 10:30 AM", else "Nov 14 12:30 PM". */
+    private static String when(long at, long now) {
+        int d = Sports.daysFrom(now, at);
+        String time = Ui.time(at);
+        if (d == 0) return Ui.trf("Today {time}", "time", time);
+        if (d == 1) return Ui.trf("Tomorrow {time}", "time", time);
+        if (d == -1) return Ui.trf("Yesterday {time}", "time", time);
+        String day = Ui.datePattern(d > 1 && d < 7 ? "format|EEE" : "format|MMM d").format(at);
+        return Ui.trf("{day} {time}", "day", day, "time", time);
+    }
+
+    /** The main screen's middle: up to three cards across. */
+    private void drawSportsTop(Canvas c) {
+        float w = (CONTENT_R - MARGIN - 2 * SPORT_GAP) / 3 * k;
+        for (int i = 0; i < sportCount; i++) drawSportCard(c, sportCards[i], (MARGIN + i * SPORT_GAP) * k + i * w, SPORT_TOP * k, w, SPORT_H * k);
+    }
+
+    private void drawSportCard(Canvas c, SportCard s, float x, float top, float w, float h) {
+        fill.setShader(null);
+        fill.setColor(SPORT_CARD);
+        c.drawRect(x, top, x + w, top + h, fill);
+        fill.setColor(s.accent);
+        c.drawRect(x, top, x + 6 * k, top + h, fill);
+        float l = x + 30 * k, r = x + w - 28 * k, base = top + 160 * k;
+        if (s.live) {
+            // The red LIVE pill, what's on, and the minute or the lap on the right.
+            float pw = sportPill.measureText(sportLiveWord) + 24 * k, mid = top + 44 * k;
+            fill.setColor(LIVE_RED);
+            c.drawRoundRect(l, mid - 16 * k, l + pw, mid + 16 * k, 16 * k, 16 * k, fill);
+            c.drawText(sportLiveWord, l + 12 * k, mid + Ui.halfCap(sportPill), sportPill);
+            c.drawText(s.title, l + pw + 14 * k, mid + Ui.halfCap(sportSub), sportSub);
+            if (!s.clock.isEmpty()) c.drawText(s.clock, r - sportName.measureText(s.clock), mid + Ui.halfCap(sportName), sportName);
+            if (s.score) {
+                float cy = top + 128 * k, cw = 64 * k, sw = sportScore.measureText(s.big);
+                drawCrest(c, s.home ? s.crest : s.oppCrest, s.home ? s.bg : CREST_OTHER, s.home ? s.ink : WHITE, l, cy - cw / 2);
+                c.drawText(s.big, l + cw + 24 * k, cy + Ui.halfCap(sportScore), sportScore);
+                drawCrest(c, s.home ? s.oppCrest : s.crest, s.home ? CREST_OTHER : s.bg, s.home ? WHITE : s.ink, l + cw + 48 * k + sw, cy - cw / 2);
+            } else {
+                c.drawText(s.big, l, base, sportBig);
+            }
+        } else {
+            drawCrest(c, s.crest, s.bg, s.ink, l, top + 24 * k);
+            c.drawText(s.title, l + 84 * k, top + 52 * k, sportName);
+            c.drawText(s.sub, l + 84 * k, top + 84 * k, sportSub);
+            sportBig.setColor(s.today ? BUS_AMBER : WHITE);
+            c.drawText(s.big, l, base, sportBig);
+            sportBig.setColor(WHITE);
+            if (!s.tail.isEmpty()) c.drawText(s.tail, l + sportBig.measureText(s.big) + 18 * k, base, sportName);
+        }
+        if (!s.foot.isEmpty()) c.drawText(s.foot, l, top + h - 30 * k, sportSub);
+    }
+
+    /** A 64 px square in the team's colour with its three letters. */
+    private void drawCrest(Canvas c, String abbr, int bg, int ink, float x, float y) {
+        float size = 64 * k;
+        fill.setColor(bg);
+        c.drawRect(x, y, x + size, y + size, fill);
+        sportCrest.setColor(ink);
+        c.drawText(abbr, x + (size - sportCrest.measureText(abbr)) / 2, y + size / 2 + Ui.halfCap(sportCrest), sportCrest);
+    }
+
+    /** One press down, under the buses: each team's standing, form, last and next game, and the F1 weekend. */
+    private void drawSportsRow(Canvas c) {
+        float left = MARGIN * k, title = (BUS_ROW_TITLE + busRow()) * k, top = (BUS_ROW_TOP + busRow()) * k;
+        drawRowTitle(c, sportTitle, left, title, sportFocused);
+        c.drawText(sportNote, left + (BUS_BAR_X + BUS_BAR_W) * k - busSmall.measureText(sportNote), title, busSmall);
+        float w = (CONTENT_R - MARGIN - 2 * SPORT_GAP) / 3 * k, h = SPORT_ROW_H * k;
+        for (int i = 0; i < sportCount; i++) {
+            SportCard s = sportCards[i];
+            float x = left + i * (w + SPORT_GAP * k), l = x + 30 * k;
+            fill.setShader(null);
+            fill.setColor(SPORT_CARD);
+            c.drawRect(x, top, x + w, top + h, fill);
+            drawCrest(c, s.crest, s.bg, s.ink, l, top + 24 * k);
+            c.drawText(s.rowTitle, l + 84 * k, top + 52 * k, sportName);
+            c.drawText(s.rowSub, l + 84 * k, top + 84 * k, sportSub);
+            if (s.sessionCount > 0) {
+                for (int j = 0; j < s.sessionCount; j++) {
+                    float y = top + (134 + j * 34) * k;
+                    // The session on the left, its time on the right: on now in red, next in amber, done in grey.
+                    int st = s.sessionState[j];
+                    sportLine.setColor(st == Sports.IN ? LIVE_RED : j == s.sessionNext ? BUS_AMBER : st == Sports.POST ? 0x99FFFFFF : WHITE);
+                    c.drawText(s.sessions[j], l, y, sportLine);
+                    c.drawText(s.sessionWhen[j], x + w - 30 * k - sportLine.measureText(s.sessionWhen[j]), y, sportLine);
+                }
+                sportLine.setColor(WHITE);
+                continue;
+            }
+            // The last five results, newest first.
+            for (int j = 0; j < s.form.length(); j++) {
+                char r = s.form.charAt(j);
+                float fx = l + j * 50 * k, fy = top + 108 * k;
+                fill.setColor(r == 'W' ? FORM_W : r == 'D' ? FORM_D : FORM_L);
+                c.drawRect(fx, fy, fx + 42 * k, fy + 36 * k, fill);
+                String letter = r == 'W' ? "W" : r == 'D' ? "D" : "L";
+                c.drawText(letter, fx + (42 * k - sportPill.measureText(letter)) / 2, fy + 18 * k + Ui.halfCap(sportPill), sportPill);
+            }
+            c.drawText(s.line1, l, top + 200 * k, sportLine);
+            sportLine.setColor(s.line2Today ? BUS_AMBER : WHITE);
+            c.drawText(s.line2, l, top + 244 * k, sportLine);
+            sportLine.setColor(WHITE);
+        }
     }
 
     /**

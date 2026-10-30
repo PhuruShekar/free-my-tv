@@ -428,3 +428,27 @@ look once this step is built and before buses (step 5) and sports (step 6) fill 
   "JBL BAR 5.1" and was saved over the stick's name; a sound-only name now counts as none (`Rules.portDevice`).
 - Tests: 128 checks.
 - Left for step 8: the new strings ("Leave {time}", "Arrive {time}", "Next bus", "Buses", "Timetable"…).
+
+### Step 6: sports (2026-10-30, on the TV)
+
+- **Owner's calls:** the four step 6 boards; ESPN's public feed approved as a new source. ESPN's F1 scoreboard has the
+  whole weekend, the session that's on, its lap and the running order, so Jolpica isn't used.
+- Data (`HomeData.refreshSports`, only while the home screen shows): each team's page (next game, standing) and the F1
+  scoreboard every 30 minutes, every minute while something is on or starts within 15; the results (the schedule, up
+  to 470 KB for the Whitecaps) every 6 hours and when a game ends. Premier League and MLS games only (ESPN lists cups
+  under other leagues).
+- What shows (`Sports`): a game on, else a result until 6 am the next morning, else the next game; F1 the session on,
+  else the race's result, else the next session. Live cards first, then the soonest, then results.
+- Main screen: three cards in the middle in the day (11 am to 4 pm); in the morning and evening only while something is
+  on, and the bus timelines then become the bus line. Quiet hours: one dim line over the bus line while a game is on.
+- One press down: a Sports stop under Buses (same pill focus, the rows around fade): standing, the last 5 results,
+  last and next game; the F1 weekend with the session on in red, the next in amber, the ones run in grey.
+- Review fixes (2026-10-30): a postponed game or a live game with no score never shows -1; long team names are cut to
+  the card; ESPN's team page names the *next* fixture as soon as a game starts (checked with a live Spanish game), so a
+  game in play is read from the league's scoreboard (`dates=` is the US Eastern day; from 15 minutes before to 4 hours
+  after kickoff) and a game just finished joins the results at once; polling every minute stops for a start time that
+  passed more than 3 hours ago; ESPN's JSON is read by `SportsFeed` and tested against saved feeds (`app/test/feeds`,
+  needs org.json's jar in `tools/lib`).
+- Tests: 192 checks (SportsTest 36, SportsFeedTest 28).
+- Left for step 8: the new strings ("Sports", "LIVE", "Full time", "Next: {team}, {when}", "Today {time}"…), and the
+  W/D/L letters.
