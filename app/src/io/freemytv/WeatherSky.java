@@ -29,8 +29,8 @@ final class WeatherSky {
     private static final int[][] DAY = {
         {0xFF7CC0F5, 0xFF5EAEF0, 0xFF4499E3, 0xFF3283D6},   // clear
         {0xFF66768C, 0xFF4C5A6E, 0xFF262F3D, 0xFF0B0F17},   // cloudy
-        {0xFF9AA5B4, 0xFF8592A3, 0xFF6B7889, 0xFF56606F},   // rain
-        {0xFFA3ADBB, 0xFF7E8999, 0xFF3E4756, 0xFF0B0F17},   // snow
+        {0xFF6F7B8D, 0xFF626E80, 0xFF525D6E, 0xFF434C5A},   // rain (dark enough at the top for white text)
+        {0xFF8C97A6, 0xFF737E8E, 0xFF3E4756, 0xFF0B0F17},   // snow
     };
     private static final float[][] DAY_AT = {{0, 0.35f, 0.7f, 1}, {0, 0.28f, 0.55f, 0.8f}, {0, 0.3f, 0.62f, 1}, {0, 0.26f, 0.56f, 0.84f}};
     private static final int[] CLEAR_NIGHT = {0xFF0F1B3D, 0xFF0C1530, 0xFF080C1C, 0xFF05070B};
@@ -49,8 +49,8 @@ final class WeatherSky {
     private static final int[][] LAYER_DAY = {
         {0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF},
         {0xFFC0C9D6, 0xFF9AA6B6, 0xFFCED6E0},
-        {0xFFCBD2DC, 0xFFE2E7ED, 0xFFE2E7ED},
-        {0xFFE2E7ED, 0xFFE2E7ED, 0xFFE2E7ED},
+        {0xFF98A2B1, 0xFFAAB3C0, 0xFFAAB3C0},
+        {0xFFC4CCD7, 0xFFC4CCD7, 0xFFC4CCD7},
     };
     private static final int[] LAYER_NIGHT = {0xFF3A4456, 0xFF323B4C, 0xFF3A4456};
     // Clear: high wisps {cx, cy, width, opacity}, by day only.

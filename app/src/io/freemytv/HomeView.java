@@ -953,7 +953,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         lWeather = Ui.text(Ui.medium, 34 * k, L_DIM);
         lClockQuote = Ui.numbers(Ui.medium, 28 * k, L_DIM);
         for (Paint p : new Paint[] {lTitle, lTab, lTabOn, lCardTitle, lCardMeta, lQuote, lDate, lClock, lWeather, lClockQuote}) {
-            p.setShadowLayer(16 * k, 0, 2 * k, HALO);
+            // Tighter on small text: a wide glow spreads too thin behind thin letters to darken a light sky.
+            p.setShadowLayer(Math.max(6 * k, p.getTextSize() * 0.28f), 0, 1.5f * k, HALO);
         }
         lightGradient = tintShade = null;
         buttonPaint = Ui.text(Ui.semibold, 29 * k, INK);
