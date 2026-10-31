@@ -194,7 +194,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         String crest = "", oppCrest = "", title = "", sub = "", big = "", tail = "", foot = "", clock = "";
         String rowTitle = "", rowSub = "", form = "", line1 = "", line2 = "";
         int bg, ink, accent, sessionCount, sessionNext;
-        boolean live, score, home, today, line2Today;
+        boolean live, score, home, today, line2Today, line2Live;
         long order;   // live first, then the soonest, then results
         final String[] sessions = new String[5], sessionWhen = new String[5];
         final int[] sessionState = new int[5];
@@ -5193,6 +5193,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         s.line1 = last == null ? "" : Ui.trf("Last: {score} {where}", "score", score(last), "where", where(last));
         s.line2 = next == null ? "" : Ui.trf("Next: {team}, {when}", "team", next.opp, "when", when(next.at, now));
         s.line2Today = next != null && Sports.daysFrom(now, next.at) == 0;
+        s.line2Live = false;
         if (g == null) {
             s.title = t.name;
             s.sub = Ui.tr(t.league);
@@ -5208,6 +5209,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             // As scores are written, the home side first.
             s.big = g.home ? g.us + " – " + g.them : g.them + " – " + g.us;
             s.foot = where(g);
+            // The drawer's row has no score: its "Next" line is the game in play.
+            s.line2 = Ui.trf("Live: {score} {where} · {clock}", "score", score(g), "where", where(g), "clock", g.clock);
+            s.line2Live = true;
             s.order = Long.MIN_VALUE;
             if (sportQuiet.isEmpty()) sportQuiet = Ui.trf("{team} {score} {where} · {clock}", "team", t.name, "score", score(g), "where", where(g), "clock", g.clock);
         } else if (g.state == Sports.POST) {
@@ -5532,7 +5536,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 c.drawText(letter, fx + (42 * k - sportPill.measureText(letter)) / 2, fy + 18 * k + Ui.halfCap(sportPill), sportPill);
             }
             c.drawText(s.line1, l, top + 200 * k, sportLine);
-            sportLine.setColor(s.line2Today ? BUS_AMBER : WHITE);
+            sportLine.setColor(s.line2Live ? LIVE_RED : s.line2Today ? BUS_AMBER : WHITE);
             c.drawText(s.line2, l, top + 244 * k, sportLine);
             sportLine.setColor(WHITE);
         }
