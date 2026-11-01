@@ -219,18 +219,26 @@ final class HomeData {
     volatile Sports.Weekend f1;
     volatile long sportsAt;
     private volatile boolean fetchingSports;
-    private volatile long sportsFailedAt, sportsDue, resultsAt;
+    private volatile long sportsFailedAt, sportsDue, resultsAt, sportsSince;
+    private volatile int sportsGen;
+    /** Sports and fantasy fetch on threads of their own: a hung call in one can't hold up the weather or the buses. */
+    private ExecutorService sportsIo = Executors.newSingleThreadExecutor(), fantasyIo = Executors.newSingleThreadExecutor();
+    private static final long STUCK_MS = 60_000L, FAIL_RETRY_MS = 2 * 60_000L;
     /** Sleeper teams (null until the first fetch; none when it isn't set up) and the FPL strip (null: none). */
     volatile Fantasy.Team[] fantasy;
     volatile Fantasy.Fpl fpl;
     volatile long fantasyAt;
     private volatile boolean fetchingFantasy;
-    private volatile long fantasyFailedAt;
+    private volatile long fantasyFailedAt, fantasySince;
+    /** What ESPN's NFL scoreboard and FPL's fixtures last said about their game week: they time the fantasy fetches. */
+    private final Fantasy.Games nflGames = new Fantasy.Games(), fplGames = new Fantasy.Games();
+    private volatile int fantasyGen;
     /** The city of the forecast in memory: another process (ScreensaverAlone) can see the city change under it. */
     private volatile String weatherFor = "";
 
     private HomeData(Context c) {
         cache = c.getSharedPreferences("homedata", Context.MODE_PRIVATE);
+        FetchLog.init(c);
         inDollars = CURRENCY.equals(cache.getString("dollarsFor", ""));
         try {
             if (Prefs.quotes()) {
@@ -322,6 +330,7 @@ final class HomeData {
             fetchingWeather = true;
             io.execute(() -> {
                 try {
+                    long began = System.nanoTime();
                     String place = weatherPlace();
                     String body = get(weatherUrl());
                     weather = parseWeather(body);
@@ -329,9 +338,11 @@ final class HomeData {
                     weatherFor = place;
                     cache.edit().putString("weather", body).putLong("weatherAt", weatherAt).putString("weatherPlace", place)
                             .putString("weatherQuery", WEATHER_QUERY).apply();
+                    FetchLog.ok("weather", began);
                     notifyListeners();
                 } catch (Exception e) {
                     weatherFailedAt = System.currentTimeMillis();
+                    FetchLog.fail("weather", e);
                     AppLog.w("weather: " + e.getMessage());
                 } finally {
                     fetchingWeather = false;
@@ -348,12 +359,15 @@ final class HomeData {
         fetchingBuses = true;
         io.execute(() -> {
             try {
+                long began = System.nanoTime();
                 // The key goes only in the address, and an error never names the address.
                 busFeed = Transit.decode(getBytes("https://gtfsapi.translink.ca/v3/gtfsrealtime?apikey=" + Config.TRANSLINK_KEY, false), BUS_STOPS);
                 busesAt = System.currentTimeMillis();
+                FetchLog.ok("buses", began);
                 notifyListeners();
             } catch (Exception e) {
                 busesFailedAt = System.currentTimeMillis();
+                FetchLog.fail("buses", e);
                 AppLog.w("buses: " + e.getClass().getSimpleName() + (e instanceof IOException && e.getMessage() != null && e.getMessage().startsWith("HTTP") ? " " + e.getMessage() : ""));
             } finally {
                 fetchingBuses = false;
@@ -368,47 +382,84 @@ final class HomeData {
      */
     void refreshSports() {
         long now = System.currentTimeMillis();
+        if (fetchingSports && now - sportsSince > STUCK_MS) {
+            // A call that hangs would keep every later refresh waiting behind it: start over on a new thread.
+            FetchLog.note("sports", "stuck for " + (now - sportsSince) / 1000 + " s, starting over");
+            sportsIo.shutdownNow();
+            sportsIo = Executors.newSingleThreadExecutor();
+            sportsGen++;
+            fetchingSports = false;
+        }
         if (fetchingSports || (now < sportsDue && now >= sportsAt) || failedRecently(sportsFailedAt, now)) return;
         fetchingSports = true;
-        io.execute(() -> {
+        sportsSince = now;
+        final int gen = sportsGen;
+        sportsIo.execute(() -> {
+            long began = System.nanoTime();
             try {
                 Sports.Team[] old = teams, t = new Sports.Team[TEAMS.length];
                 Sports.Game[] fin = new Sports.Game[TEAMS.length];
-                boolean ended = false;
+                // Each part stands alone: one that fails keeps what it had, and the rest still update.
+                boolean ended = false, teamsOk = true, resultsOk = true, f1Ok = true;
                 for (int i = 0; i < TEAMS.length; i++) {
                     t[i] = new Sports.Team(TEAMS[i][2], TEAMS[i][3]);
-                    JSONObject team = new JSONObject(get(ESPN + TEAMS[i][0] + "/teams/" + TEAMS[i][1])).getJSONObject("team");
-                    t[i].name = team.optString("shortDisplayName");
-                    t[i].standing = team.optString("standingSummary");
-                    JSONArray next = team.optJSONArray("nextEvent");
-                    if (next != null && next.length() > 0) t[i].next = Sports.usable(SportsFeed.game(next.getJSONObject(0), TEAMS[i][1]));
-                    // The team page names the next fixture as soon as a game starts: the game in play is on the scoreboard.
-                    Sports.Game was = old == null ? null : old[i].next;
-                    if (Sports.watching(was, now)) {
-                        Sports.Game g = Sports.usable(scoreboardGame(TEAMS[i], was == null ? now : was.at));
-                        if (g != null && g.state == Sports.IN) t[i].next = g;
-                        else if (g != null && g.state == Sports.POST) fin[i] = g;
+                    try {
+                        JSONObject team = new JSONObject(get(ESPN + TEAMS[i][0] + "/teams/" + TEAMS[i][1])).getJSONObject("team");
+                        t[i].name = team.optString("shortDisplayName");
+                        t[i].standing = team.optString("standingSummary");
+                        JSONArray next = team.optJSONArray("nextEvent");
+                        if (next != null && next.length() > 0) t[i].next = Sports.usable(SportsFeed.game(next.getJSONObject(0), TEAMS[i][1]));
+                        // The team page names the next fixture as soon as a game starts: the game in play is on the scoreboard.
+                        Sports.Game was = old == null ? null : old[i].next;
+                        if (Sports.watching(was, now)) {
+                            Sports.Game g = Sports.usable(scoreboardGame(TEAMS[i], was == null ? now : was.at));
+                            if (g != null && g.state == Sports.IN) t[i].next = g;
+                            else if (g != null && g.state == Sports.POST) fin[i] = g;
+                        }
+                        ended |= was != null && was.state == Sports.IN && (t[i].next == null || t[i].next.state != Sports.IN);
+                    } catch (Exception e) {
+                        teamsOk = false;
+                        FetchLog.fail("sports " + TEAMS[i][2], e);
+                        fin[i] = null;
+                        if (old != null) {
+                            t[i].name = old[i].name;
+                            t[i].standing = old[i].standing;
+                            t[i].next = old[i].next;
+                        }
                     }
-                    ended |= was != null && was.state == Sports.IN && (t[i].next == null || t[i].next.state != Sports.IN);
                 }
                 boolean results = old == null || ended || now - resultsAt > RESULTS_EVERY || now < resultsAt;
                 for (int i = 0; i < TEAMS.length; i++) {
-                    if (!results) {
-                        t[i].results.addAll(old[i].results);
-                        Sports.addResult(t[i].results, fin[i]);
-                        continue;
+                    boolean got = false;
+                    if (results) {
+                        try {
+                            JSONArray events = new JSONObject(get(ESPN + TEAMS[i][0] + "/teams/" + TEAMS[i][1] + "/schedule")).getJSONArray("events");
+                            for (int j = 0; j < events.length(); j++) {
+                                Sports.Game g = SportsFeed.game(events.getJSONObject(j), TEAMS[i][1]);
+                                if (g.state == Sports.POST && g.us >= 0 && g.them >= 0) t[i].results.add(g);
+                            }
+                            t[i].results.sort((a, b) -> Long.compare(b.at, a.at));
+                            while (t[i].results.size() > 5) t[i].results.remove(5);
+                            got = true;
+                        } catch (Exception e) {
+                            resultsOk = false;
+                            FetchLog.fail("sports " + TEAMS[i][2] + " results", e);
+                        }
                     }
-                    JSONArray events = new JSONObject(get(ESPN + TEAMS[i][0] + "/teams/" + TEAMS[i][1] + "/schedule")).getJSONArray("events");
-                    for (int j = 0; j < events.length(); j++) {
-                        Sports.Game g = SportsFeed.game(events.getJSONObject(j), TEAMS[i][1]);
-                        if (g.state == Sports.POST && g.us >= 0 && g.them >= 0) t[i].results.add(g);
+                    if (!got) {
+                        t[i].results.clear();
+                        if (old != null) t[i].results.addAll(old[i].results);
                     }
-                    t[i].results.sort((a, b) -> Long.compare(b.at, a.at));
-                    while (t[i].results.size() > 5) t[i].results.remove(5);
                     Sports.addResult(t[i].results, fin[i]);
                 }
-                if (results) resultsAt = now;
-                Sports.Weekend w = SportsFeed.weekend(new JSONObject(get(ESPN + "racing/f1/scoreboard")));
+                if (results) resultsAt = resultsOk ? now : 0;   // 0: the results are asked for again with the next answer
+                Sports.Weekend w = f1;
+                try {
+                    w = SportsFeed.weekend(new JSONObject(get(ESPN + "racing/f1/scoreboard")));
+                } catch (Exception e) {
+                    f1Ok = false;
+                    FetchLog.fail("sports F1", e);
+                }
                 boolean live = false;
                 long soonest = 0;
                 for (Sports.Team x : t) {
@@ -416,20 +467,24 @@ final class HomeData {
                     live |= x.next.state == Sports.IN;
                     if (x.next.state == Sports.PRE && (soonest == 0 || x.next.at < soonest)) soonest = x.next.at;
                 }
-                for (Sports.Session s : w.sessions) {
+                if (w != null) for (Sports.Session s : w.sessions) {
                     live |= s.state == Sports.IN;
                     if (s.state == Sports.PRE && (soonest == 0 || s.at < soonest)) soonest = s.at;
                 }
+                if (gen != sportsGen) return;   // this thread was given up on while it waited
+                if (teamsOk || old != null) teams = t;
                 f1 = w;
-                teams = t;
-                sportsAt = System.currentTimeMillis();
-                sportsDue = sportsAt + Sports.every(live, soonest, sportsAt);
+                long done = System.currentTimeMillis();
+                if (teamsOk) sportsAt = done;
+                sportsDue = done + (teamsOk && resultsOk && f1Ok ? Sports.every(live, soonest, done) : FAIL_RETRY_MS);
+                if (teamsOk && resultsOk && f1Ok) FetchLog.ok("sports" + (results ? " +results" : ""), began);
                 notifyListeners();
             } catch (Exception e) {
-                sportsFailedAt = System.currentTimeMillis();
+                if (gen == sportsGen) sportsFailedAt = System.currentTimeMillis();
+                FetchLog.fail("sports", e);
                 AppLog.w("sports: " + e.getClass().getSimpleName() + (e instanceof IOException && e.getMessage() != null && e.getMessage().startsWith("HTTP") ? " " + e.getMessage() : ""));
             } finally {
-                fetchingSports = false;
+                if (gen == sportsGen) fetchingSports = false;
             }
         });
     }
@@ -445,20 +500,51 @@ final class HomeData {
         return null;
     }
 
+    /** This NFL week's kickoffs and whether a game is on, from ESPN: when Sleeper's scores are worth asking for. */
+    private void nflBoard(long now) throws Exception {
+        JSONArray events = new JSONObject(get(ESPN + "football/nfl/scoreboard")).optJSONArray("events");
+        int n = events == null ? 0 : events.length();
+        long[] starts = new long[n];
+        boolean live = false;
+        for (int i = 0; i < n; i++) {
+            JSONObject e = events.getJSONObject(i);
+            starts[i] = Sports.time(e.optString("date"));
+            JSONObject status = e.getJSONArray("competitions").getJSONObject(0).optJSONObject("status");
+            JSONObject type = status == null ? null : status.optJSONObject("type");
+            live |= Sports.state(type == null ? "" : type.optString("state")) == Sports.IN;
+        }
+        nflGames.update(live, starts, false, now);
+    }
+
     /** The Fantasy row: only in a build with the owner's Sleeper username or FPL team. */
     static boolean fantasyOn() {
         return Config.DEMO || !Config.SLEEPER_USER.isEmpty() || Config.FPL_TEAM.matches("\\d+");
     }
 
     /**
-     * Sleeper's NFL leagues and the FPL strip, every 5 minutes while the home screen shows (it asks; the screensaver
-     * doesn't). Slow parts are kept: Sleeper's leagues and rosters for an hour, FPL's gameweeks (1.8 MB) for a day.
+     * Sleeper's NFL leagues and the FPL strip, timed by their games (Fantasy.Games): every 3 minutes while a game is
+     * on, hourly through the rest of a game week, and between game weeks only a look at the feed. It asks while the
+     * home screen shows (the screensaver doesn't). Slow parts are kept: Sleeper's leagues and rosters for an hour,
+     * FPL's gameweeks (1.8 MB) for a day.
      */
     void refreshFantasy() {
         long now = System.currentTimeMillis();
-        if (!fantasyOn() || fetchingFantasy || (now - fantasyAt <= Fantasy.EVERY && now >= fantasyAt) || failedRecently(fantasyFailedAt, now)) return;
+        if (fetchingFantasy && now - fantasySince > STUCK_MS) {
+            FetchLog.note("fantasy", "stuck for " + (now - fantasySince) / 1000 + " s, starting over");
+            fantasyIo.shutdownNow();
+            fantasyIo = Executors.newSingleThreadExecutor();
+            fantasyGen++;
+            fetchingFantasy = false;
+        }
+        if (!fantasyOn() || fetchingFantasy || failedRecently(fantasyFailedAt, now)) return;
+        final boolean sleeperDue = !Config.SLEEPER_USER.isEmpty() && nflGames.due(now) <= now;
+        final boolean fplDue = Config.FPL_TEAM.matches("\\d+") && fplGames.due(now) <= now;
+        if (Config.DEMO ? now - fantasyAt <= 5 * 60_000L && now >= fantasyAt : fantasy != null && !sleeperDue && !fplDue) return;
         fetchingFantasy = true;
-        io.execute(() -> {
+        fantasySince = now;
+        final int gen = fantasyGen;
+        fantasyIo.execute(() -> {
+            long began = System.nanoTime();
             try {
                 if (Config.DEMO) {
                     fantasy = demoTeams();
@@ -467,17 +553,56 @@ final class HomeData {
                     notifyListeners();
                     return;
                 }
-                Fantasy.Team[] sl = Config.SLEEPER_USER.isEmpty() ? new Fantasy.Team[0] : sleeper(now);
-                Fantasy.Fpl f = Config.FPL_TEAM.matches("\\d+") ? fpl(now) : null;
+                // Each part stands alone: one that fails keeps what it had.
+                Fantasy.Team[] sl = fantasy;
+                Fantasy.Fpl f = fpl;
+                boolean ok = true;
+                if (Config.SLEEPER_USER.isEmpty()) {
+                    sl = new Fantasy.Team[0];
+                } else if (sleeperDue || sl == null) {
+                    try {
+                        nflBoard(now);
+                    } catch (Exception e) {
+                        ok = false;
+                        FetchLog.fail("fantasy NFL games", e);
+                    }
+                    // Between game weeks the scores don't change: only the first time, and in a game week.
+                    if (sl == null || nflGames.active(now)) {
+                        try {
+                            sl = sleeper(now);
+                        } catch (Exception e) {
+                            ok = false;
+                            FetchLog.fail("fantasy Sleeper", e);
+                        }
+                    }
+                }
+                if (!Config.FPL_TEAM.matches("\\d+")) {
+                    f = null;
+                } else if (fplDue || f == null) {
+                    try {
+                        f = fpl(now, f);
+                    } catch (Exception e) {
+                        ok = false;
+                        FetchLog.fail("fantasy FPL", e);
+                    }
+                }
+                if (gen != fantasyGen) return;
+                boolean fresh = sl != fantasy || f != fpl;   // a look at a feed alone leaves the scores, and "Updated", as they were
                 fantasy = sl;
                 fpl = f;
-                fantasyAt = System.currentTimeMillis();
+                if (ok) {
+                    if (fresh) fantasyAt = System.currentTimeMillis();
+                    FetchLog.ok("fantasy", began);
+                } else {
+                    fantasyFailedAt = System.currentTimeMillis();
+                }
                 notifyListeners();
             } catch (Exception e) {
-                fantasyFailedAt = System.currentTimeMillis();
+                if (gen == fantasyGen) fantasyFailedAt = System.currentTimeMillis();
+                FetchLog.fail("fantasy", e);
                 AppLog.w("fantasy: " + e.getClass().getSimpleName() + (e instanceof IOException && e.getMessage() != null && e.getMessage().startsWith("HTTP") ? " " + e.getMessage() : ""));
             } finally {
-                fetchingFantasy = false;
+                if (gen == fantasyGen) fetchingFantasy = false;
             }
         });
     }
@@ -652,14 +777,22 @@ final class HomeData {
     private boolean fplFinished;
     private long fplDeadlineCurrent, fplDeadlineNext;
     private long fplStart, fplEnd;
-    private int fplFixturesFor;
 
-    private Fantasy.Fpl fpl(long now) throws Exception {
-        if (fplDailyAt == 0 || now - fplDailyAt > 24 * 3600_000L || now < fplDailyAt) {
+    /** The FPL strip. `old` comes back unchanged when it's between gameweeks and nothing changed since. */
+    private Fantasy.Fpl fpl(long now, Fantasy.Fpl old) throws Exception {
+        boolean held = fplCurrent > 0 && !fplFinished;
+        boolean rolled = false;
+        // Daily; and sooner when the gameweek's last match was 3 hours ago and it isn't marked finished, or the next one's deadline passed.
+        if (fplDailyAt == 0 || now - fplDailyAt > 24 * 3600_000L || now < fplDailyAt
+                || held && fplEnd > 0 && now > fplEnd + 3 * 3600_000L && now - fplDailyAt > 3 * 3600_000L
+                || fplDeadlineNext > 0 && now > fplDeadlineNext && fplDailyAt < fplDeadlineNext) {
+            rolled = true;
             // Only the gameweeks out of 1.8 MB: found by their bracket, so the players aren't parsed.
             String all = get(FPL + "bootstrap-static/");
             JSONArray events = new JSONArray(array(all, "\"events\":"));
             fplCurrent = fplNext = 0;
+            fplDeadlineNext = 0;
+            fplFinished = false;
             for (int i = 0; i < events.length(); i++) {
                 JSONObject e = events.getJSONObject(i);
                 if (e.optBoolean("is_current")) {
@@ -673,8 +806,27 @@ final class HomeData {
                 }
             }
             fplDailyAt = now;
-            fplFixturesFor = 0;
         }
+        // The gameweek on, or the next one: when its matches start and whether one is on (a small call).
+        held = fplCurrent > 0 && !fplFinished;
+        int shown = held ? fplCurrent : fplNext;
+        long[] starts = new long[0];
+        boolean playing = false;
+        if (shown > 0) {
+            JSONArray fixtures = new JSONArray(get(FPL + "fixtures/?event=" + shown));
+            starts = new long[fixtures.length()];
+            fplStart = fplEnd = 0;
+            for (int i = 0; i < starts.length; i++) {
+                JSONObject x = fixtures.getJSONObject(i);
+                long at = starts[i] = Sports.time(x.optString("kickoff_time"));
+                if (at > 0 && (fplStart == 0 || at < fplStart)) fplStart = at;
+                if (at > fplEnd) fplEnd = at;
+                playing |= x.optBoolean("started") && !x.optBoolean("finished") && !x.optBoolean("finished_provisional");
+            }
+        }
+        fplGames.update(playing, starts, held, now);
+        // Between gameweeks the points don't change: the strip stays as it was, unless a gameweek just began or ended.
+        if (old != null && !rolled && !fplGames.active(now)) return old;
         JSONObject entry = new JSONObject(get(FPL + "entry/" + Config.FPL_TEAM + "/"));
         Fantasy.Fpl f = new Fantasy.Fpl();
         f.name = entry.optString("name");
@@ -692,18 +844,6 @@ final class HomeData {
                 f.rank = l.optInt("entry_rank");
                 f.lastRank = l.optInt("entry_last_rank");
             }
-        }
-        if (f.nextGw > 0 && fplFixturesFor != f.nextGw) {
-            JSONArray fixtures = new JSONArray(get(FPL + "fixtures/?event=" + f.nextGw));
-            long first = 0, last = 0;
-            for (int i = 0; i < fixtures.length(); i++) {
-                long at = Sports.time(fixtures.getJSONObject(i).optString("kickoff_time"));
-                if (at > 0 && (first == 0 || at < first)) first = at;
-                if (at > last) last = at;
-            }
-            fplStart = first;
-            fplEnd = last;
-            fplFixturesFor = f.nextGw;
         }
         f.start = f.nextGw > 0 ? fplStart : 0;
         f.end = f.nextGw > 0 ? fplEnd : 0;
@@ -739,12 +879,15 @@ final class HomeData {
         fetchingCanada = true;
         io.execute(() -> {
             try {
+                long began = System.nanoTime();
                 aqhi = parseAqhi(get(aqhiUrl()));
                 alert = parseAlerts(get(alertsUrl()), System.currentTimeMillis());
                 canadaAt = System.currentTimeMillis();
+                FetchLog.ok("environment canada", began);
                 notifyListeners();
             } catch (Exception e) {
                 canadaFailedAt = System.currentTimeMillis();
+                FetchLog.fail("environment canada", e);
                 AppLog.w("environment canada: " + e.getMessage());
             } finally {
                 fetchingCanada = false;

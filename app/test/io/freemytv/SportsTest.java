@@ -51,9 +51,14 @@ public final class SportsTest {
         fp2.state = race.state = Sports.POST;
         check("the race's result until the next morning", Sports.shown(w, at(32, 20, 0)) == race);
 
-        eq("a minute while live", Sports.LIVE_EVERY, Sports.every(true, 0, now));
-        eq("a minute 10 minutes before a start", Sports.LIVE_EVERY, Sports.every(false, now + 10 * 60_000L, now));
+        eq("3 minutes while live", 3 * 60_000L, Sports.every(true, 0, now));
+        eq("and 10 minutes before a start", Sports.LIVE_EVERY, Sports.every(false, now + 10 * 60_000L, now));
         eq("half an hour otherwise", Sports.CALM_EVERY, Sports.every(false, now + 3600_000L, now));
+        eq("but looked at as the last 15 minutes begin", 5 * 60_000L, Sports.every(false, now + 20 * 60_000L, now));
+        eq("never faster than the live rate", Sports.LIVE_EVERY, Sports.every(false, now + 15 * 60_000L + 1000L, now));
+        check("a live score is stale after 8 minutes", Sports.stale(now - 9 * 60_000L, now));
+        check("not before", !Sports.stale(now - 7 * 60_000L, now));
+        check("no answer yet isn't stale", !Sports.stale(0, now));
 
         Sports.Game live = game(Sports.IN, at(31, 10, 30), -1, -1);
         check("a live game with no score counts as 0–0", Sports.usable(live) == live && live.us == 0 && live.them == 0);
@@ -73,7 +78,7 @@ public final class SportsTest {
         eq("but not twice", 4, list.size());
         Sports.addResult(list, game(Sports.POST, at(31, 13, 0), -1, -1));
         eq("nor without a score", 4, list.size());
-        eq("a minute 1 hour after a start that's still 'not started'", Sports.LIVE_EVERY, Sports.every(false, now - 3600_000L, now));
+        eq("the live rate 1 hour after a start that's still 'not started'", Sports.LIVE_EVERY, Sports.every(false, now - 3600_000L, now));
         eq("half an hour when it's 2 days old", Sports.CALM_EVERY, Sports.every(false, now - 48 * 3600_000L, now));
 
         System.out.println(passed + " checks passed" + (failed > 0 ? ", " + failed + " failed" : ""));

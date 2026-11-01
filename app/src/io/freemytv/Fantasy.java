@@ -88,6 +88,54 @@ final class Fantasy {
         return out;
     }
 
-    /** How often to ask Sleeper and FPL again: every 5 minutes. */
-    static final long EVERY = 5 * 60_000L;
+    /** While a game is on, every 3 minutes; through the rest of a game week, hourly; between game weeks, no scores. */
+    static final long LIVE_EVERY = 3 * 60_000L, WEEK_EVERY = 3600_000L, QUIET_EVERY = 6 * 3600_000L;
+    /** A game week opens this long before its first kickoff and closes this long after its last; a kickoff is looked at this long after it. */
+    static final long LEAD = 2 * 3600_000L, TAIL = 5 * 3600_000L, KICKOFF_LAG = 60_000L;
+
+    /**
+     * What a games feed (ESPN's NFL scoreboard, FPL's fixtures) last said about this game week: when its games start
+     * and whether one is on. It decides when to ask again, for the scores (Sleeper, FPL's entry) too.
+     */
+    static final class Games {
+        long[] starts = new long[0];
+        boolean live, held;
+        /** When it was last asked (0: never). */
+        long at;
+
+        /** `held`: the week stays open past its last kickoff (FPL's gameweek isn't finished yet). */
+        void update(boolean live, long[] starts, boolean held, long now) {
+            this.live = live;
+            this.starts = starts;
+            this.held = held;
+            this.at = now;
+        }
+
+        /** In a game week (or a game is on): the scores are worth asking for. */
+        boolean active(long now) {
+            if (live || held) return true;
+            if (starts.length == 0) return false;
+            long first = starts[0], last = starts[0];
+            for (long s : starts) {
+                first = Math.min(first, s);
+                last = Math.max(last, s);
+            }
+            return now >= first - LEAD && now <= last + TAIL;
+        }
+
+        /** When to ask again: 0 is now. Outside a game week only the feed is looked at, now and then, to see one coming. */
+        long due(long now) {
+            if (at == 0 || now < at) return 0;
+            if (live) return at + LIVE_EVERY;
+            long t;
+            if (active(now)) {
+                t = at + WEEK_EVERY;
+                for (long s : starts) if (s > at) t = Math.min(t, s + KICKOFF_LAG);
+            } else {
+                t = at + QUIET_EVERY;
+                for (long s : starts) if (s - LEAD > at) t = Math.min(t, s - LEAD);
+            }
+            return t;
+        }
+    }
 }
