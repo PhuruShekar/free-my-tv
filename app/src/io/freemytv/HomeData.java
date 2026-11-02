@@ -218,21 +218,17 @@ final class HomeData {
     volatile Sports.Team[] teams;
     volatile Sports.Weekend f1;
     volatile long sportsAt;
-    private volatile boolean fetchingSports;
-    private volatile long sportsFailedAt, sportsDue, resultsAt, sportsSince;
-    private volatile int sportsGen;
+    private volatile long sportsFailedAt, sportsDue, resultsAt;
     /** Sports and fantasy fetch on threads of their own: a hung call in one can't hold up the weather or the buses. */
-    private ExecutorService sportsIo = Executors.newSingleThreadExecutor(), fantasyIo = Executors.newSingleThreadExecutor();
-    private static final long STUCK_MS = 60_000L, FAIL_RETRY_MS = 2 * 60_000L;
+    private final Lane sportsLane = new Lane(m -> FetchLog.note("sports", m)), fantasyLane = new Lane(m -> FetchLog.note("fantasy", m));
+    private static final long FAIL_RETRY_MS = 2 * 60_000L;
     /** Sleeper teams (null until the first fetch; none when it isn't set up) and the FPL strip (null: none). */
     volatile Fantasy.Team[] fantasy;
     volatile Fantasy.Fpl fpl;
     volatile long fantasyAt;
-    private volatile boolean fetchingFantasy;
-    private volatile long fantasyFailedAt, fantasySince;
+    private volatile long fantasyFailedAt;
     /** What ESPN's NFL scoreboard and FPL's fixtures last said about their game week: they time the fantasy fetches. */
     private final Fantasy.Games nflGames = new Fantasy.Games(), fplGames = new Fantasy.Games();
-    private volatile int fantasyGen;
     /** The city of the forecast in memory: another process (ScreensaverAlone) can see the city change under it. */
     private volatile String weatherFor = "";
 
@@ -368,7 +364,7 @@ final class HomeData {
             } catch (Exception e) {
                 busesFailedAt = System.currentTimeMillis();
                 FetchLog.fail("buses", e);
-                AppLog.w("buses: " + e.getClass().getSimpleName() + (e instanceof IOException && e.getMessage() != null && e.getMessage().startsWith("HTTP") ? " " + e.getMessage() : ""));
+                AppLog.w("buses: " + FetchLog.describe(e));
             } finally {
                 fetchingBuses = false;
             }
@@ -382,19 +378,8 @@ final class HomeData {
      */
     void refreshSports() {
         long now = System.currentTimeMillis();
-        if (fetchingSports && now - sportsSince > STUCK_MS) {
-            // A call that hangs would keep every later refresh waiting behind it: start over on a new thread.
-            FetchLog.note("sports", "stuck for " + (now - sportsSince) / 1000 + " s, starting over");
-            sportsIo.shutdownNow();
-            sportsIo = Executors.newSingleThreadExecutor();
-            sportsGen++;
-            fetchingSports = false;
-        }
-        if (fetchingSports || (now < sportsDue && now >= sportsAt) || failedRecently(sportsFailedAt, now)) return;
-        fetchingSports = true;
-        sportsSince = now;
-        final int gen = sportsGen;
-        sportsIo.execute(() -> {
+        if (sportsLane.busy(now) || (now < sportsDue && now >= sportsAt) || failedRecently(sportsFailedAt, now)) return;
+        sportsLane.run(now, gen -> {
             long began = System.nanoTime();
             try {
                 Sports.Team[] old = teams, t = new Sports.Team[TEAMS.length];
@@ -421,36 +406,24 @@ final class HomeData {
                         teamsOk = false;
                         FetchLog.fail("sports " + TEAMS[i][2], e);
                         fin[i] = null;
-                        if (old != null) {
-                            t[i].name = old[i].name;
-                            t[i].standing = old[i].standing;
-                            t[i].next = old[i].next;
-                        }
+                        Sports.keep(t[i], old == null ? null : old[i]);
                     }
                 }
                 boolean results = old == null || ended || now - resultsAt > RESULTS_EVERY || now < resultsAt;
                 for (int i = 0; i < TEAMS.length; i++) {
-                    boolean got = false;
+                    List<Sports.Game> fresh = null;
                     if (results) {
                         try {
                             JSONArray events = new JSONObject(get(ESPN + TEAMS[i][0] + "/teams/" + TEAMS[i][1] + "/schedule")).getJSONArray("events");
-                            for (int j = 0; j < events.length(); j++) {
-                                Sports.Game g = SportsFeed.game(events.getJSONObject(j), TEAMS[i][1]);
-                                if (g.state == Sports.POST && g.us >= 0 && g.them >= 0) t[i].results.add(g);
-                            }
-                            t[i].results.sort((a, b) -> Long.compare(b.at, a.at));
-                            while (t[i].results.size() > 5) t[i].results.remove(5);
-                            got = true;
+                            List<Sports.Game> all = new ArrayList<>();
+                            for (int j = 0; j < events.length(); j++) all.add(SportsFeed.game(events.getJSONObject(j), TEAMS[i][1]));
+                            fresh = Sports.latest(all);
                         } catch (Exception e) {
                             resultsOk = false;
                             FetchLog.fail("sports " + TEAMS[i][2] + " results", e);
                         }
                     }
-                    if (!got) {
-                        t[i].results.clear();
-                        if (old != null) t[i].results.addAll(old[i].results);
-                    }
-                    Sports.addResult(t[i].results, fin[i]);
+                    Sports.results(t[i], fresh, old == null ? null : old[i], fin[i]);
                 }
                 if (results) resultsAt = resultsOk ? now : 0;   // 0: the results are asked for again with the next answer
                 Sports.Weekend w = f1;
@@ -471,7 +444,7 @@ final class HomeData {
                     live |= s.state == Sports.IN;
                     if (s.state == Sports.PRE && (soonest == 0 || s.at < soonest)) soonest = s.at;
                 }
-                if (gen != sportsGen) return;   // this thread was given up on while it waited
+                if (!sportsLane.current(gen)) return;   // this thread was given up on while it waited
                 if (teamsOk || old != null) teams = t;
                 f1 = w;
                 long done = System.currentTimeMillis();
@@ -480,11 +453,9 @@ final class HomeData {
                 if (teamsOk && resultsOk && f1Ok) FetchLog.ok("sports" + (results ? " +results" : ""), began);
                 notifyListeners();
             } catch (Exception e) {
-                if (gen == sportsGen) sportsFailedAt = System.currentTimeMillis();
+                if (sportsLane.current(gen)) sportsFailedAt = System.currentTimeMillis();
                 FetchLog.fail("sports", e);
-                AppLog.w("sports: " + e.getClass().getSimpleName() + (e instanceof IOException && e.getMessage() != null && e.getMessage().startsWith("HTTP") ? " " + e.getMessage() : ""));
-            } finally {
-                if (gen == sportsGen) fetchingSports = false;
+                AppLog.w("sports: " + FetchLog.describe(e));
             }
         });
     }
@@ -502,18 +473,8 @@ final class HomeData {
 
     /** This NFL week's kickoffs and whether a game is on, from ESPN: when Sleeper's scores are worth asking for. */
     private void nflBoard(long now) throws Exception {
-        JSONArray events = new JSONObject(get(ESPN + "football/nfl/scoreboard")).optJSONArray("events");
-        int n = events == null ? 0 : events.length();
-        long[] starts = new long[n];
-        boolean live = false;
-        for (int i = 0; i < n; i++) {
-            JSONObject e = events.getJSONObject(i);
-            starts[i] = Sports.time(e.optString("date"));
-            JSONObject status = e.getJSONArray("competitions").getJSONObject(0).optJSONObject("status");
-            JSONObject type = status == null ? null : status.optJSONObject("type");
-            live |= Sports.state(type == null ? "" : type.optString("state")) == Sports.IN;
-        }
-        nflGames.update(live, starts, false, now);
+        JSONObject board = new JSONObject(get(ESPN + "football/nfl/scoreboard"));
+        nflGames.update(SportsFeed.anyLive(board), SportsFeed.kickoffs(board), false, now);
     }
 
     /** The Fantasy row: only in a build with the owner's Sleeper username or FPL team. */
@@ -529,21 +490,11 @@ final class HomeData {
      */
     void refreshFantasy() {
         long now = System.currentTimeMillis();
-        if (fetchingFantasy && now - fantasySince > STUCK_MS) {
-            FetchLog.note("fantasy", "stuck for " + (now - fantasySince) / 1000 + " s, starting over");
-            fantasyIo.shutdownNow();
-            fantasyIo = Executors.newSingleThreadExecutor();
-            fantasyGen++;
-            fetchingFantasy = false;
-        }
-        if (!fantasyOn() || fetchingFantasy || failedRecently(fantasyFailedAt, now)) return;
+        if (!fantasyOn() || fantasyLane.busy(now) || failedRecently(fantasyFailedAt, now)) return;
         final boolean sleeperDue = !Config.SLEEPER_USER.isEmpty() && nflGames.due(now) <= now;
         final boolean fplDue = Config.FPL_TEAM.matches("\\d+") && fplGames.due(now) <= now;
         if (Config.DEMO ? now - fantasyAt <= 5 * 60_000L && now >= fantasyAt : fantasy != null && !sleeperDue && !fplDue) return;
-        fetchingFantasy = true;
-        fantasySince = now;
-        final int gen = fantasyGen;
-        fantasyIo.execute(() -> {
+        fantasyLane.run(now, gen -> {
             long began = System.nanoTime();
             try {
                 if (Config.DEMO) {
@@ -572,6 +523,7 @@ final class HomeData {
                             sl = sleeper(now);
                         } catch (Exception e) {
                             ok = false;
+                            nflGames.retry();
                             FetchLog.fail("fantasy Sleeper", e);
                         }
                     }
@@ -583,10 +535,11 @@ final class HomeData {
                         f = fpl(now, f);
                     } catch (Exception e) {
                         ok = false;
+                        fplGames.retry();
                         FetchLog.fail("fantasy FPL", e);
                     }
                 }
-                if (gen != fantasyGen) return;
+                if (!fantasyLane.current(gen)) return;
                 boolean fresh = sl != fantasy || f != fpl;   // a look at a feed alone leaves the scores, and "Updated", as they were
                 fantasy = sl;
                 fpl = f;
@@ -598,11 +551,9 @@ final class HomeData {
                 }
                 notifyListeners();
             } catch (Exception e) {
-                if (gen == fantasyGen) fantasyFailedAt = System.currentTimeMillis();
+                if (fantasyLane.current(gen)) fantasyFailedAt = System.currentTimeMillis();
                 FetchLog.fail("fantasy", e);
-                AppLog.w("fantasy: " + e.getClass().getSimpleName() + (e instanceof IOException && e.getMessage() != null && e.getMessage().startsWith("HTTP") ? " " + e.getMessage() : ""));
-            } finally {
-                if (gen == fantasyGen) fetchingFantasy = false;
+                AppLog.w("fantasy: " + FetchLog.describe(e));
             }
         });
     }
@@ -814,14 +765,12 @@ final class HomeData {
         boolean playing = false;
         if (shown > 0) {
             JSONArray fixtures = new JSONArray(get(FPL + "fixtures/?event=" + shown));
-            starts = new long[fixtures.length()];
+            starts = SportsFeed.fplKickoffs(fixtures);
+            playing = SportsFeed.fplLive(fixtures);
             fplStart = fplEnd = 0;
-            for (int i = 0; i < starts.length; i++) {
-                JSONObject x = fixtures.getJSONObject(i);
-                long at = starts[i] = Sports.time(x.optString("kickoff_time"));
+            for (long at : starts) {
                 if (at > 0 && (fplStart == 0 || at < fplStart)) fplStart = at;
                 if (at > fplEnd) fplEnd = at;
-                playing |= x.optBoolean("started") && !x.optBoolean("finished") && !x.optBoolean("finished_provisional");
             }
         }
         fplGames.update(playing, starts, held, now);
@@ -1078,7 +1027,12 @@ final class HomeData {
                 ByteArrayOutputStream out = new ByteArrayOutputStream();
                 byte[] buffer = new byte[8192];
                 int n;
-                while ((n = in.read(buffer)) > 0) out.write(buffer, 0, n);
+                long began = System.nanoTime();
+                while ((n = in.read(buffer)) > 0) {
+                    out.write(buffer, 0, n);
+                    // The read timeout is per read: a server sending a byte every few seconds would hold the thread.
+                    if (System.nanoTime() - began > 30_000_000_000L) throw new IOException("too slow");
+                }
                 return out.toByteArray();
             }
         } finally {

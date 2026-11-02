@@ -16,7 +16,7 @@ mkdir -p out/test
 SEP=:
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) SEP=";";; esac   # Windows Java wants ; between classpath entries
 JSON="$(ls tools/lib/json-*.jar 2>/dev/null | head -1 || true)"
-SRC="app/src/io/freemytv/Rules.java app/src/io/freemytv/Transit.java app/src/io/freemytv/Sports.java app/src/io/freemytv/Fantasy.java"
+SRC="app/src/io/freemytv/Rules.java app/src/io/freemytv/Transit.java app/src/io/freemytv/Sports.java app/src/io/freemytv/Fantasy.java app/src/io/freemytv/Lane.java"
 TESTS="$(ls app/test/io/freemytv/*Test.java | grep -v SportsFeedTest || true)"
 if [ -n "$JSON" ]; then
   SRC="$SRC app/src/io/freemytv/SportsFeed.java"

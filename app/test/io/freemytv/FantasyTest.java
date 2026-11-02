@@ -34,6 +34,10 @@ public final class FantasyTest {
         check("an empty feed (off season): not active", !g.active(t0));
         g.update(false, new long[] {t0 - 30 * hr}, true, t0);
         check("held open (a gameweek not finished): active", g.active(t0 + 20 * hr));
+        g.update(false, new long[] {t0 - hr, t0 + 20 * hr}, false, t0);
+        check("in a game week, not due for an hour", g.due(t0) > t0 + 30 * 60_000L);
+        g.retry();
+        eq("but after the scores failed: at once", 0L, g.due(t0 + 1000));
         eq("a clock set back asks at once", 0L, g.due(t0 - hr));
 
         eq("1st", "1st", Fantasy.ordinal(1));

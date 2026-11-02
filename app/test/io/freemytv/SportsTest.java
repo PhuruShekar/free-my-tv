@@ -81,6 +81,32 @@ public final class SportsTest {
         eq("the live rate 1 hour after a start that's still 'not started'", Sports.LIVE_EVERY, Sports.every(false, now - 3600_000L, now));
         eq("half an hour when it's 2 days old", Sports.CALM_EVERY, Sports.every(false, now - 48 * 3600_000L, now));
 
+        Sports.Team kept = new Sports.Team("TOT", "Premier League");
+        Sports.Team was = new Sports.Team("TOT", "Premier League");
+        was.name = "Spurs";
+        was.standing = "14th";
+        was.next = game(Sports.PRE, at(31, 10, 30), -1, -1);
+        was.results.add(game(Sports.POST, at(24, 9, 30), 2, 0));
+        Sports.keep(kept, was);
+        check("a team that failed keeps its name, standing and next game", kept.name.equals("Spurs") && kept.standing.equals("14th") && kept.next == was.next);
+        Sports.keep(kept, null);
+        check("with nothing before it, nothing changes", kept.name.equals("Spurs"));
+        java.util.List<Sports.Game> all = new java.util.ArrayList<>();
+        for (int d = 1; d <= 7; d++) all.add(game(Sports.POST, at(d, 12, 0), d, 0));
+        all.add(game(Sports.PRE, at(31, 10, 30), -1, -1));
+        all.add(game(Sports.POST, at(20, 12, 0), -1, -1));
+        java.util.List<Sports.Game> five = Sports.latest(all);
+        eq("latest: five kept", 5, five.size());
+        eq("newest first", 7, five.get(0).us);
+        check("a game to come or without a score is no result", five.stream().allMatch(g -> g.state == Sports.POST && g.us >= 0));
+        Sports.Team out = new Sports.Team("TOT", "Premier League");
+        Sports.results(out, null, was, null);
+        eq("results that couldn't be fetched: the old ones", 1, out.results.size());
+        Sports.results(out, five, was, null);
+        eq("fresh results replace them", 5, out.results.size());
+        Sports.results(out, null, null, game(Sports.POST, at(30, 12, 0), 3, 1));
+        eq("with no old ones, a game just finished is the only result", 1, out.results.size());
+
         System.out.println(passed + " checks passed" + (failed > 0 ? ", " + failed + " failed" : ""));
         if (failed > 0) System.exit(1);
     }

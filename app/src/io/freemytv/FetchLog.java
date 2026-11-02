@@ -19,6 +19,7 @@ final class FetchLog {
 
     private static final long MAX = 64 * 1024;
     private static File file;
+    private static final SimpleDateFormat STAMP = new SimpleDateFormat("MM-dd HH:mm:ss", Locale.US);   // used only inside write()
 
     static synchronized void init(Context c) {
         if (file != null) return;
@@ -31,15 +32,19 @@ final class FetchLog {
     }
 
     static void fail(String source, Exception e) {
-        write(source + " FAILED " + e.getClass().getSimpleName()
-                + (e instanceof IOException && e.getMessage() != null && e.getMessage().startsWith("HTTP") ? " " + e.getMessage() : ""));
+        write(source + " FAILED " + describe(e));
+    }
+
+    /** What went wrong, short and with no address: the exception's name, and the status for an HTTP error. */
+    static String describe(Exception e) {
+        return e.getClass().getSimpleName() + (e instanceof IOException && e.getMessage() != null && e.getMessage().startsWith("HTTP") ? " " + e.getMessage() : "");
     }
 
     static void note(String source, String text) {
         write(source + " " + text);
     }
 
-    /** The newest half of the log is kept when it fills (`fetch.log.1` holds the one before). */
+    /** When the log fills it becomes `fetch.log.1` (the one before is dropped) and a new one starts. */
     private static synchronized void write(String line) {
         if (file == null) return;
         try {
@@ -48,7 +53,7 @@ final class FetchLog {
                 older.delete();
                 file.renameTo(older);
             }
-            String stamp = new SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).format(new Date());
+            String stamp = STAMP.format(new Date());
             try (FileOutputStream out = new FileOutputStream(file, true)) {
                 out.write((stamp + " " + line + "\n").getBytes(StandardCharsets.UTF_8));
             }

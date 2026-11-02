@@ -33,6 +33,42 @@ final class SportsFeed {
         return g;
     }
 
+    /** A league scoreboard's kickoffs, for Fantasy.Games. */
+    static long[] kickoffs(JSONObject board) {
+        JSONArray events = board.optJSONArray("events");
+        long[] out = new long[events == null ? 0 : events.length()];
+        for (int i = 0; i < out.length; i++) out[i] = Sports.time(events.optJSONObject(i).optString("date"));
+        return out;
+    }
+
+    /** Whether any game on a league scoreboard is in play. */
+    static boolean anyLive(JSONObject board) {
+        JSONArray events = board.optJSONArray("events");
+        for (int i = 0; events != null && i < events.length(); i++) {
+            JSONArray comps = events.optJSONObject(i).optJSONArray("competitions");
+            JSONObject status = comps == null || comps.length() == 0 ? null : comps.optJSONObject(0).optJSONObject("status");
+            JSONObject type = status == null ? null : status.optJSONObject("type");
+            if (Sports.state(type == null ? "" : type.optString("state")) == Sports.IN) return true;
+        }
+        return false;
+    }
+
+    /** FPL's kickoff times for a gameweek's fixtures. */
+    static long[] fplKickoffs(JSONArray fixtures) {
+        long[] out = new long[fixtures.length()];
+        for (int i = 0; i < out.length; i++) out[i] = Sports.time(fixtures.optJSONObject(i).optString("kickoff_time"));
+        return out;
+    }
+
+    /** Whether an FPL match has started and isn't over: `finished` comes hours after the whistle, `finished_provisional` at it. */
+    static boolean fplLive(JSONArray fixtures) {
+        for (int i = 0; i < fixtures.length(); i++) {
+            JSONObject x = fixtures.optJSONObject(i);
+            if (x.optBoolean("started") && !x.optBoolean("finished") && !x.optBoolean("finished_provisional")) return true;
+        }
+        return false;
+    }
+
     /** A score as ESPN gives it: a string, a number, or an object with its displayValue; -1 when there's none. */
     static int score(Object s) {
         if (s instanceof JSONObject) s = ((JSONObject) s).opt("displayValue");

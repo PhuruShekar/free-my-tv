@@ -113,6 +113,31 @@ final class Sports {
         while (results.size() > 5) results.remove(5);
     }
 
+    /** A team that couldn't be fetched keeps what it had. */
+    static void keep(Team t, Team old) {
+        if (old == null) return;
+        t.name = old.name;
+        t.standing = old.standing;
+        t.next = old.next;
+    }
+
+    /** The finished, scored games among `games`: newest first, five kept. */
+    static List<Game> latest(List<Game> games) {
+        List<Game> out = new ArrayList<>();
+        for (Game g : games) if (g.state == POST && g.us >= 0 && g.them >= 0) out.add(g);
+        out.sort((a, b) -> Long.compare(b.at, a.at));
+        while (out.size() > 5) out.remove(5);
+        return out;
+    }
+
+    /** The team's results: the fresh ones, or the old ones when those couldn't be fetched, and a game just seen finished. */
+    static void results(Team t, List<Game> fresh, Team old, Game finished) {
+        t.results.clear();
+        if (fresh != null) t.results.addAll(fresh);
+        else if (old != null) t.results.addAll(old.results);
+        addResult(t.results, finished);
+    }
+
     /** A result stays on the board until 6 am the morning after the game. */
     static boolean recent(long at, long now) {
         Calendar c = Calendar.getInstance();

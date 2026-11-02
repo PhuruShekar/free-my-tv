@@ -98,21 +98,27 @@ final class Fantasy {
      * and whether one is on. It decides when to ask again, for the scores (Sleeper, FPL's entry) too.
      */
     static final class Games {
-        long[] starts = new long[0];
-        boolean live, held;
+        // Read by the UI thread, written by the fantasy thread: every method is synchronized.
+        private long[] starts = new long[0];
+        private boolean live, held;
         /** When it was last asked (0: never). */
-        long at;
+        private long at;
 
         /** `held`: the week stays open past its last kickoff (FPL's gameweek isn't finished yet). */
-        void update(boolean live, long[] starts, boolean held, long now) {
+        synchronized void update(boolean live, long[] starts, boolean held, long now) {
             this.live = live;
             this.starts = starts;
             this.held = held;
             this.at = now;
         }
 
+        /** The scores failed to come: ask again as soon as the retry pause is over, not at the next hourly time. */
+        synchronized void retry() {
+            at = 0;
+        }
+
         /** In a game week (or a game is on): the scores are worth asking for. */
-        boolean active(long now) {
+        synchronized boolean active(long now) {
             if (live || held) return true;
             if (starts.length == 0) return false;
             long first = starts[0], last = starts[0];
@@ -124,7 +130,7 @@ final class Fantasy {
         }
 
         /** When to ask again: 0 is now. Outside a game week only the feed is looked at, now and then, to see one coming. */
-        long due(long now) {
+        synchronized long due(long now) {
             if (at == 0 || now < at) return 0;
             if (live) return at + LIVE_EVERY;
             long t;
