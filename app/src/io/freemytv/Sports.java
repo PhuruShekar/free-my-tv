@@ -14,8 +14,8 @@ final class Sports {
     private Sports() {}
 
     static final int PRE = 0, IN = 1, POST = 2;
-    /** While something is on or about to start, every minute; otherwise every half hour. */
-    static final long LIVE_EVERY = 60_000L, CALM_EVERY = 30 * 60_000L, SOON = 15 * 60_000L;
+    /** While something is on or about to start, every 3 minutes; otherwise every half hour. */
+    static final long LIVE_EVERY = 3 * 60_000L, CALM_EVERY = 30 * 60_000L, SOON = 15 * 60_000L;
 
     /** One game, from our side: `us` and `them` are -1 before it starts. */
     static final class Game {
@@ -113,6 +113,31 @@ final class Sports {
         while (results.size() > 5) results.remove(5);
     }
 
+    /** A team that couldn't be fetched keeps what it had. */
+    static void keep(Team t, Team old) {
+        if (old == null) return;
+        t.name = old.name;
+        t.standing = old.standing;
+        t.next = old.next;
+    }
+
+    /** The finished, scored games among `games`: newest first, five kept. */
+    static List<Game> latest(List<Game> games) {
+        List<Game> out = new ArrayList<>();
+        for (Game g : games) if (g.state == POST && g.us >= 0 && g.them >= 0) out.add(g);
+        out.sort((a, b) -> Long.compare(b.at, a.at));
+        while (out.size() > 5) out.remove(5);
+        return out;
+    }
+
+    /** The team's results: the fresh ones, or the old ones when those couldn't be fetched, and a game just seen finished. */
+    static void results(Team t, List<Game> fresh, Team old, Game finished) {
+        t.results.clear();
+        if (fresh != null) t.results.addAll(fresh);
+        else if (old != null) t.results.addAll(old.results);
+        addResult(t.results, finished);
+    }
+
     /** A result stays on the board until 6 am the morning after the game. */
     static boolean recent(long at, long now) {
         Calendar c = Calendar.getInstance();
@@ -168,8 +193,17 @@ final class Sports {
         return Math.floorDiv(t + c.get(Calendar.ZONE_OFFSET) + c.get(Calendar.DST_OFFSET), 86_400_000L);
     }
 
-    /** How long until the next fetch: a minute while anything is on or starts within 15 minutes (or began in the last 3 hours). */
+    /** How long until the next fetch: 3 minutes while anything is on or starts within 15 minutes (or began in the last 3 hours). */
     static long every(boolean live, long soonest, long now) {
-        return live || soonest > now - 3 * 3600_000L && soonest - now < SOON ? LIVE_EVERY : CALM_EVERY;
+        if (live || soonest > now - 3 * 3600_000L && soonest - now < SOON) return LIVE_EVERY;
+        // Something about to start is looked at as its last 15 minutes begin, not up to half an hour after it started.
+        return soonest > now ? Math.max(LIVE_EVERY, Math.min(CALM_EVERY, soonest - SOON - now)) : CALM_EVERY;
+    }
+
+    /** A live score this long since the last answer isn't shown as live: the answers stopped coming. */
+    static final long STALE = 8 * 60_000L;
+
+    static boolean stale(long fetchedAt, long now) {
+        return fetchedAt > 0 && now - fetchedAt > STALE;
     }
 }

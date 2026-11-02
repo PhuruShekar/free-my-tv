@@ -58,6 +58,25 @@ public final class SportsFeedTest {
         eq("as an object", 4, SportsFeed.score(new JSONObject("{\"displayValue\":\"4\"}")));
         eq("unreadable", -1, SportsFeed.score("x"));
 
+        // The NFL scoreboard (taken on a Sunday: one game in play, two over): what times Sleeper's fetches.
+        JSONObject nfl = json("nfl.json");
+        eq("NFL: three kickoffs", 3, SportsFeed.kickoffs(nfl).length);
+        eq("the first one's time", Sports.time("2026-11-01T21:05Z"), SportsFeed.kickoffs(nfl)[0]);
+        check("NFL: a game is in play", SportsFeed.anyLive(nfl));
+        nfl.getJSONArray("events").getJSONObject(0).getJSONArray("competitions").getJSONObject(0).getJSONObject("status").getJSONObject("type").put("state", "post");
+        check("NFL: none once it's over", !SportsFeed.anyLive(nfl));
+        check("NFL: an empty board has no games", !SportsFeed.anyLive(new JSONObject()) && SportsFeed.kickoffs(new JSONObject()).length == 0);
+
+        // FPL's fixtures for a finished gameweek: `finished_provisional` is true at the whistle, `finished` only hours later.
+        JSONArray fpl = new JSONArray(new String(Files.readAllBytes(Paths.get("app/test/feeds/fpl-fixtures.json")), StandardCharsets.UTF_8));
+        eq("FPL: ten fixtures", 10, SportsFeed.fplKickoffs(fpl).length);
+        check("FPL: a kickoff time was read", SportsFeed.fplKickoffs(fpl)[0] > 0);
+        check("FPL: whistle blown (provisional), not live", !SportsFeed.fplLive(fpl));
+        fpl.getJSONObject(3).put("finished_provisional", false);
+        check("FPL: started and not over is live", SportsFeed.fplLive(fpl));
+        fpl.getJSONObject(3).put("started", false);
+        check("FPL: not started isn't", !SportsFeed.fplLive(fpl));
+
         System.out.println(passed + " checks passed" + (failed > 0 ? ", " + failed + " failed" : ""));
         if (failed > 0) System.exit(1);
     }

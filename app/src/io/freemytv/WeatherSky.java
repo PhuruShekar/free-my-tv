@@ -292,6 +292,11 @@ final class WeatherSky {
     }
 
     /** Whether anything moves in this sky (rain, snow or clouds; the clear night is still). */
+    /** Milliseconds between frames: clouds and stars drift a few pixels a second, only rain and snow need more. */
+    long frameMs() {
+        return masks != null && (masks.kind == RAIN || masks.kind == SNOW) ? 25 : 100;
+    }
+
     boolean moves() {
         return masks != null && !(masks.kind == CLEAR && night > 0.99f);
     }

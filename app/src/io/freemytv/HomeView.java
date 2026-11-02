@@ -117,7 +117,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private static final long TOAST_MS = 6000, FADE_MS = 800;
     /** Blur radii of the shadow and shadowDeep paints (Shadows needs them to draw the same blur on older TVs). */
     private static final float SHADOW_BLUR = 26, DEEP_BLUR = 30;
-    private static final int SKY = 0, HERO = 1, STATUS = 2, PLATTER = 3, TILES = 4, DRAWER = 5, SHEET = 6, TOAST = 7, MENU = 8;
+    private static final int SKY = 0, HERO = 1, STATUS = 2, PLATTER = 3, TILES = 4, DRAWER = 5, SHEET = 6, TOAST = 7, MENU = 8, PICKS = 9;
     private static final int Z_STATUS = 0, Z_HERO = 1, Z_SHELF = 2, Z_DRAWER = 3;
     private static final ExecutorService LOADER = Executors.newSingleThreadExecutor();
     // Light design (the L_ constants): title, tab bar, three recommendation cards and the shelf.
@@ -194,7 +194,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         String crest = "", oppCrest = "", title = "", sub = "", big = "", tail = "", foot = "", clock = "";
         String rowTitle = "", rowSub = "", form = "", line1 = "", line2 = "";
         int bg, ink, accent, sessionCount, sessionNext;
-        boolean live, score, home, today, line2Today;
+        boolean live, score, home, today, line2Today, line2Live;
         long order;   // live first, then the soonest, then results
         final String[] sessions = new String[5], sessionWhen = new String[5];
         final int[] sessionState = new int[5];
@@ -240,7 +240,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         @Override public void hold(int id) { if (sheetOpen) a11yHold(); else if (canReorder()) startReorder(); else showMenu(); }
     });
     private final RectF a11yRect = new RectF();
-    private final Layer sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, toastLayer, menuLayer;
+    private final Layer sky, heroLayer, status, platter, tiles, drawerLayer, picksLayer, sheetLayer, toastLayer, menuLayer;
     private int zone = Z_SHELF;
 
     // Night look (like Apple's "Automatic" appearance): darker from sunset to sunrise, with a 2 s transition.
@@ -425,7 +425,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private boolean skySlow;
     private long skyNanos;
     private static final int SKY_SLOW_FRAMES = 30;
-    private static final long SKY_FRAME_MS = 25, SKY_LATE_NANOS = 70_000_000L;
+    private static final long SKY_LATE_MS = 45;   // a frame this much later than its turn is a late one
     private long clockMinute = -1;
     private boolean okDown, backDown;
     private float touchX, touchY;
@@ -502,7 +502,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             // The layer may be shifted (bottom drawer): the glass reads the background from where it really is. The
             // drawer and the top buttons are always drawn as if resting in place (they are only visible there and are
             // not redrawn while they move).
-            scene.setOffset(0, kind == DRAWER || kind == STATUS ? 0 : getTranslationY());
+            scene.setOffset(0, kind == DRAWER || kind == PICKS || kind == STATUS ? 0 : getTranslationY());
             shadows.dither = dark() > 0.5f;
             switch (kind) {
                 case SKY: drawSky(c); break;
@@ -511,6 +511,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 case PLATTER: drawPlatter(c); break;
                 case TILES: drawTiles(c); break;
                 case DRAWER: drawDrawer(c); break;
+                case PICKS: drawPicks(c); break;
                 case SHEET: drawSheet(c); break;
                 case MENU: drawMenu(c); break;
                 default: drawToast(c); break;
@@ -736,6 +737,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         platter = new Layer(a, PLATTER);
         tiles = new Layer(a, TILES);
         drawerLayer = new Layer(a, DRAWER);
+        picksLayer = new Layer(a, PICKS);   // the picks animate on their own: the rows above stay recorded
         sheetLayer = new Layer(a, SHEET);
         toastLayer = new Layer(a, TOAST);
         menuLayer = new Layer(a, MENU);
@@ -743,13 +745,17 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         // Not on Android 8 to 11: on older GPUs (a Mi Box 3's Mali-450) redrawing and compositing a big layer on every
         // frame cost more than drawing straight to the screen (measured: focus on the picks 33 → 12 ms a frame, the
         // drawer 19 → 17 ms).
-        for (View v : new View[] {heroLayer, status, platter, tiles, drawerLayer, sheetLayer}) v.setLayerType(Ui.LEGACY ? LAYER_TYPE_NONE : LAYER_TYPE_HARDWARE, null);
-        for (View v : new View[] {sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, menuLayer, toastLayer}) {
+        for (View v : new View[] {heroLayer, status, platter, tiles, drawerLayer, picksLayer, sheetLayer}) v.setLayerType(Ui.LEGACY ? LAYER_TYPE_NONE : LAYER_TYPE_HARDWARE, null);
+        // The sky alone is cached there: it costs ~17 ms of GPU to draw, so redrawing it under every focus move was the
+        // frame (measured on a 1.8 GB TCL: 70 to 35 ms); still, it's just a texture until the sky moves.
+        if (Ui.LEGACY) sky.setLayerType(LAYER_TYPE_HARDWARE, null);
+        for (View v : new View[] {sky, heroLayer, status, platter, tiles, drawerLayer, picksLayer, sheetLayer, menuLayer, toastLayer}) {
             v.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);   // TalkBack reads the items (Spoken)
             addView(v);
         }
         setContentDescription(Ui.NAME);
         drawerLayer.setVisibility(INVISIBLE);
+        picksLayer.setVisibility(INVISIBLE);
         menuLayer.setVisibility(INVISIBLE);
         for (int i = 0; i < topFocus.length; i++) {
             topFocus[i] = new Spring(0.26f, 0.85f, 0);
@@ -802,6 +808,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         resumedAt = now;
         lastNanos = 0;
         lastStep = 0;
+        FetchLog.note("home", "resumed");
         data.addListener(this);
         recs.addListener(this);
         data.refreshIfStale();
@@ -839,6 +846,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     void pause() {
+        FetchLog.note("home", "paused");
         if (!running) return;
         running = false;
         handler.removeCallbacks(bgFollow);
@@ -938,7 +946,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private void invalidateAll() {
-        for (View v : new View[] {sky, heroLayer, status, platter, tiles, drawerLayer}) v.invalidate();
+        for (View v : new View[] {sky, heroLayer, status, platter, tiles, drawerLayer, picksLayer}) v.invalidate();
     }
 
     // MARK: - Size and layers
@@ -958,6 +966,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         measure(tiles, width, Math.round(270 * kk));
         // On the board it also holds the picks row and the weather card under it (drawerScroll brings them up).
         measure(drawerLayer, width, Math.round((BOARD ? 1420 + BUS_ROW + WEATHER_ROW + SPORT_ROW + FANTASY_ROW : 600) * kk));
+        measure(picksLayer, width, Math.round((BOARD ? 1420 + BUS_ROW + WEATHER_ROW + SPORT_ROW + FANTASY_ROW : 600) * kk));
         measure(sheetLayer, width, height);
         measure(menuLayer, width, height);
         measure(toastLayer, width, Math.round(220 * kk));   // full width: a toast may sit right of a long title
@@ -977,6 +986,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         place(platter, 0, Math.round(750 * kk));
         place(tiles, 0, Math.round(790 * kk));
         place(drawerLayer, 0, Math.round(470 * kk));
+        place(picksLayer, 0, Math.round(470 * kk));
         sheetLayer.layout(0, 0, width, height);
         menuLayer.layout(0, 0, width, height);
         sheetLayer.setPivotX(width / 2f);
@@ -1155,10 +1165,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         if (topMoving) status.invalidate();
         heroMoving |= topMoving | cardsMoving;
-        if (BOARD && cardsMoving) drawerLayer.invalidate();   // the board's picks are in the drawer
+        if (BOARD && cardsMoving) picksLayer.invalidate();
         boolean drawerItemsMoving = step(drawerFocus, dt);
         boolean gridMoving = step(gridFocus, dt) | scroll.step(dt);
-        boolean drawerMoving = drawer.step(dt) | drawerScroll.step(dt);
+        boolean drawerSliding = drawer.step(dt), drawerMoving = drawerSliding | drawerScroll.step(dt);
         boolean sheetMoving = sheet.step(dt);
         boolean toastFading = tickToast(up);
         boolean heroFading = tickHeroFade(up);
@@ -1176,9 +1186,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (tilesMoving || tilesDirty) tiles.invalidate();
         if (statusMoving || statusDirty || bgFading) status.invalidate();
         if (heroMoving || heroDirty || heroFading) heroLayer.invalidate();
-        if (drawerItemsMoving || drawerDirty || bgFading) drawerLayer.invalidate();
+        if (drawerItemsMoving || drawerDirty || bgFading) {
+            drawerLayer.invalidate();
+            picksLayer.invalidate();
+        }
         if (gridMoving || gridDirty) sheetLayer.invalidate();
-        if (drawerMoving || bgFading) sky.invalidate();
+        if (drawerSliding || bgFading) sky.invalidate();   // the veil under the drawer; scrolling its rows leaves the sky alone
         if (bgFading || (drawerWasMoving && !drawerMoving)) platter.invalidate();
         drawerWasMoving = drawerMoving;
         tilesDirty = statusDirty = heroDirty = drawerDirty = gridDirty = motionDirty = false;
@@ -1202,10 +1215,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         boolean moving = tilesMoving || statusMoving || heroMoving || drawerItemsMoving || gridMoving || drawerMoving
                 || menuMoving || sheetMoving || toastFading || heroFading || bgFading || nightMoving || tintMoving;
         boolean skyMoves = (!moving || skyAlways) && (!quiet || skyAlways) && !sheetOpen && sheet.value <= 0.001f && !skySlow && !continueMode() && weatherSky.moves();
-        if (skyMoves && skyNanos != 0 && frameTimeNanos - skyNanos < SKY_FRAME_MS * 1_000_000L) {
+        long skyEvery = weatherSky.frameMs();
+        if (skyMoves && skyNanos != 0 && frameTimeNanos - skyNanos < skyEvery * 1_000_000L) {
             // at 60 fps (the drawer open): every other frame
         } else if (skyMoves) {
-            if (skyNanos != 0 && frameTimeNanos - skyNanos > SKY_LATE_NANOS) {
+            if (skyNanos != 0 && frameTimeNanos - skyNanos > (skyEvery + SKY_LATE_MS) * 1_000_000L) {
                 if (++skyLate > SKY_SLOW_FRAMES) {
                     skySlow = true;
                     AppLog.w("sky: frames late, it stays still");
@@ -1220,7 +1234,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             skyNanos = 0;
         }
         if (busy) Choreographer.getInstance().postFrameCallback(this);
-        else Choreographer.getInstance().postFrameCallbackDelayed(this, skyMoves && !skySlow ? SKY_FRAME_MS : 1000);
+        else Choreographer.getInstance().postFrameCallbackDelayed(this, skyMoves && !skySlow ? skyEvery : 1000);
     }
 
     private void wake() {
@@ -1252,6 +1266,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         drawerLayer.setTranslationY((1 - d) * shift - scrolled);
         drawerLayer.setAlpha(da);
         drawerLayer.setVisibility(da > 0.002f ? VISIBLE : INVISIBLE);
+        picksLayer.setTranslationY((1 - d) * shift - scrolled);
+        picksLayer.setAlpha(da);
+        picksLayer.setVisibility(da > 0.002f ? VISIBLE : INVISIBLE);
         sheetLayer.setVisibility(s > 0.001f || sheetOpen ? VISIBLE : INVISIBLE);
         sheetLayer.setAlpha(s);
         float scale = 1.04f - 0.04f * s;
@@ -2445,7 +2462,17 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             drawSportsRow(c);
             if (dim >= 0) c.restoreToCount(dim);
         }
-        dim = dim(c, rowFocus, rowsTop + rows(), 3600);
+    }
+
+    /** The picks row, in a layer of its own so the cards' animation doesn't record the rows above again. */
+    private void drawPicks(Canvas c) {
+        if (drawerItems.isEmpty()) return;
+        rowTitle.setColor(BOARD ? 0xEBFFFFFF : tone(L_DIM, 0xB3FFFFFF));
+        cardTitle.setColor(tone(L_DIM, 0xB3FFFFFF));
+        cardText.setColor(drawerInk(0.95f));
+        cardDim.setColor(tone(L_DIM, 0xADFFFFFF));
+        boolean rowFocus = busFocused || sportFocused || fantasyFocused || weatherFocused;
+        int dim = dim(c, rowFocus, BUS_ROW_TITLE - 48 + rows(), 3600);
         if (picksRow()) drawPicksRow(c);
         if (dim >= 0) c.restoreToCount(dim);
     }
@@ -5193,11 +5220,21 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         s.line1 = last == null ? "" : Ui.trf("Last: {score} {where}", "score", score(last), "where", where(last));
         s.line2 = next == null ? "" : Ui.trf("Next: {team}, {when}", "team", next.opp, "when", when(next.at, now));
         s.line2Today = next != null && Sports.daysFrom(now, next.at) == 0;
+        s.line2Live = false;
         if (g == null) {
             s.title = t.name;
             s.sub = Ui.tr(t.league);
             s.big = Ui.tr("No games soon");
             s.order = Long.MAX_VALUE;
+        } else if (g.state == Sports.IN && Sports.stale(data.sportsAt, now)) {
+            // No answer for minutes: the score as last seen, not "live" (it may be over).
+            String at = Ui.clock(data.sportsAt);
+            s.title = Ui.trf("Score at {time}", "time", at);
+            s.sub = Ui.tr(t.league);
+            s.big = score(g);
+            s.tail = where(g);
+            s.line2 = Ui.trf("Score at {time}: {score} {where}", "time", at, "score", score(g), "where", where(g));
+            s.order = Long.MAX_VALUE - 1;
         } else if (g.state == Sports.IN) {
             s.live = s.score = true;
             sportLive = true;
@@ -5208,6 +5245,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             // As scores are written, the home side first.
             s.big = g.home ? g.us + " – " + g.them : g.them + " – " + g.us;
             s.foot = where(g);
+            // The drawer's row has no score: its "Next" line is the game in play.
+            s.line2 = Ui.trf("Live: {score} {where} · {clock}", "score", score(g), "where", where(g), "clock", g.clock);
+            s.line2Live = true;
             s.order = Long.MIN_VALUE;
             if (sportQuiet.isEmpty()) sportQuiet = Ui.trf("{team} {score} {where} · {clock}", "team", t.name, "score", score(g), "where", where(g), "clock", g.clock);
         } else if (g.state == Sports.POST) {
@@ -5238,6 +5278,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             s.sub = "";
             s.big = Ui.tr("No sessions soon");
             s.order = Long.MAX_VALUE;
+        } else if (x.state == Sports.IN && Sports.stale(data.sportsAt, now)) {
+            s.sub = Ui.trf("{session} · as of {time}", "session", Ui.tr(x.name), "time", Ui.clock(data.sportsAt));
+            s.big = x.leader.isEmpty() ? w.name : Ui.trf("P1 {driver}", "driver", x.leader);
+            s.order = Long.MAX_VALUE - 1;
         } else if (x.state == Sports.IN) {
             s.live = true;
             sportLive = true;
@@ -5532,7 +5576,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 c.drawText(letter, fx + (42 * k - sportPill.measureText(letter)) / 2, fy + 18 * k + Ui.halfCap(sportPill), sportPill);
             }
             c.drawText(s.line1, l, top + 200 * k, sportLine);
-            sportLine.setColor(s.line2Today ? BUS_AMBER : WHITE);
+            sportLine.setColor(s.line2Live ? LIVE_RED : s.line2Today ? BUS_AMBER : WHITE);
             c.drawText(s.line2, l, top + 244 * k, sportLine);
             sportLine.setColor(WHITE);
         }
