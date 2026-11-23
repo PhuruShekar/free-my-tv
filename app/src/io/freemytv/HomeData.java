@@ -282,6 +282,31 @@ final class HomeData {
         }
     }
 
+    /** Set only while refreshAll runs (on the UI thread): each fetcher reads it before starting its thread. */
+    private boolean forced;
+
+    /** The Refresh button: every source now, past failures and timers ignored. A fetch already running isn't doubled. */
+    void refreshAll() {
+        pricesFailedAt = weatherFailedAt = canadaFailedAt = busesFailedAt = sportsFailedAt = fantasyFailedAt = 0;
+        sportsDue = resultsAt = 0;
+        fplDailyAt = sleeperStaticAt = 0;   // FPL's gameweeks and Sleeper's leagues read again too
+        forced = true;
+        try {
+            refreshIfStale();
+            if (busesOn()) refreshBuses();
+            refreshSports();
+            refreshFantasy();
+        } finally {
+            forced = false;
+        }
+    }
+
+    /** Whether a fetch is running, for the Refresh button's spin. */
+    boolean busy() {
+        long now = System.currentTimeMillis();
+        return fetchingPrices || fetchingWeather || fetchingCanada || fetchingBuses || sportsLane.busy(now) || fantasyLane.busy(now);
+    }
+
     void addListener(Listener l) { if (!listeners.contains(l)) listeners.add(l); }
     void removeListener(Listener l) { listeners.remove(l); }
 
@@ -289,7 +314,7 @@ final class HomeData {
     void refreshIfStale() {
         long now = System.currentTimeMillis();
         // A negative age (the TV's clock went back) counts as stale: otherwise the data would freeze.
-        if (!fetchingPrices && coinCount() > 0 && (now - pricesAt > PRICES_EVERY || now < pricesAt) && !failedRecently(pricesFailedAt, now)) {
+        if (!fetchingPrices && coinCount() > 0 && (forced || now - pricesAt > PRICES_EVERY || now < pricesAt) && !failedRecently(pricesFailedAt, now)) {
             fetchingPrices = true;
             io.execute(() -> {
                 try {
@@ -322,7 +347,7 @@ final class HomeData {
             });
         }
         boolean moved = !weatherPlace().equals(weatherFor);
-        if (!fetchingWeather && (moved || now - weatherAt > WEATHER_EVERY || now < weatherAt) && !failedRecently(weatherFailedAt, now)) {
+        if (!fetchingWeather && (forced || moved || now - weatherAt > WEATHER_EVERY || now < weatherAt) && !failedRecently(weatherFailedAt, now)) {
             fetchingWeather = true;
             io.execute(() -> {
                 try {
@@ -351,7 +376,7 @@ final class HomeData {
     /** The bus feed when it's stale. Only the home screen asks (the screensaver shows no buses). */
     void refreshBuses() {
         long now = System.currentTimeMillis();
-        if (!busesOn() || Config.TRANSLINK_KEY.isEmpty() || fetchingBuses || buses == null || (now - busesAt <= BUSES_EVERY && now >= busesAt) || failedRecently(busesFailedAt, now)) return;
+        if (!busesOn() || Config.TRANSLINK_KEY.isEmpty() || fetchingBuses || buses == null || (!forced && now - busesAt <= BUSES_EVERY && now >= busesAt) || failedRecently(busesFailedAt, now)) return;
         fetchingBuses = true;
         io.execute(() -> {
             try {
@@ -491,9 +516,10 @@ final class HomeData {
     void refreshFantasy() {
         long now = System.currentTimeMillis();
         if (!fantasyOn() || fantasyLane.busy(now) || failedRecently(fantasyFailedAt, now)) return;
-        final boolean sleeperDue = !Config.SLEEPER_USER.isEmpty() && nflGames.due(now) <= now;
-        final boolean fplDue = Config.FPL_TEAM.matches("\\d+") && fplGames.due(now) <= now;
-        if (Config.DEMO ? now - fantasyAt <= 5 * 60_000L && now >= fantasyAt : fantasy != null && !sleeperDue && !fplDue) return;
+        final boolean force = forced;
+        final boolean sleeperDue = !Config.SLEEPER_USER.isEmpty() && (force || nflGames.due(now) <= now);
+        final boolean fplDue = Config.FPL_TEAM.matches("\\d+") && (force || fplGames.due(now) <= now);
+        if (Config.DEMO ? !force && now - fantasyAt <= 5 * 60_000L && now >= fantasyAt : fantasy != null && !sleeperDue && !fplDue) return;
         fantasyLane.run(now, gen -> {
             long began = System.nanoTime();
             try {
@@ -518,7 +544,7 @@ final class HomeData {
                         FetchLog.fail("fantasy NFL games", e);
                     }
                     // Between game weeks the scores don't change: only the first time, and in a game week.
-                    if (sl == null || nflGames.active(now)) {
+                    if (sl == null || force || nflGames.active(now)) {
                         try {
                             sl = sleeper(now);
                         } catch (Exception e) {
@@ -532,7 +558,7 @@ final class HomeData {
                     f = null;
                 } else if (fplDue || f == null) {
                     try {
-                        f = fpl(now, f);
+                        f = fpl(now, f, force);
                     } catch (Exception e) {
                         ok = false;
                         fplGames.retry();
@@ -730,7 +756,7 @@ final class HomeData {
     private long fplStart, fplEnd;
 
     /** The FPL strip. `old` comes back unchanged when it's between gameweeks and nothing changed since. */
-    private Fantasy.Fpl fpl(long now, Fantasy.Fpl old) throws Exception {
+    private Fantasy.Fpl fpl(long now, Fantasy.Fpl old, boolean force) throws Exception {
         boolean held = fplCurrent > 0 && !fplFinished;
         boolean rolled = false;
         // Daily; and sooner when the gameweek's last match was 3 hours ago and it isn't marked finished, or the next one's deadline passed.
@@ -775,7 +801,7 @@ final class HomeData {
         }
         fplGames.update(playing, starts, held, now);
         // Between gameweeks the points don't change: the strip stays as it was, unless a gameweek just began or ended.
-        if (old != null && !rolled && !fplGames.active(now)) return old;
+        if (old != null && !rolled && !force && !fplGames.active(now)) return old;
         JSONObject entry = new JSONObject(get(FPL + "entry/" + Config.FPL_TEAM + "/"));
         Fantasy.Fpl f = new Fantasy.Fpl();
         f.name = entry.optString("name");
@@ -824,7 +850,7 @@ final class HomeData {
 
     /** Environment Canada's AQHI and alerts: only for a place in Canada (its alerts' box finds nothing elsewhere). */
     private void refreshCanada(long now) {
-        if (fetchingCanada || (now - canadaAt <= CANADA_EVERY && now >= canadaAt) || failedRecently(canadaFailedAt, now)) return;
+        if (fetchingCanada || (!forced && now - canadaAt <= CANADA_EVERY && now >= canadaAt) || failedRecently(canadaFailedAt, now)) return;
         fetchingCanada = true;
         io.execute(() -> {
             try {
