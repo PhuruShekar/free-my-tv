@@ -298,6 +298,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private Paint menuTitlePaint, menuSubPaint, menuOptionPaint;
     private final RectF[] cardRects = new RectF[Recs.MAX_CARDS];
     private final List<HomeApps.Item> lightButtons = new ArrayList<>();
+    /** When Refresh was pressed (uptime), 0 when its icon rests. */
+    private long spinSince;
     private Paint lTitle, lTab, lTabOn, lCardTitle, lCardMeta, lQuote, lTip, lDate, lClock, lWeather, lClockQuote;
     private Shader lightGradient;
     // Continue Watching: the background takes the focused card's colour (worked out once per picture, WatchArt), easing
@@ -1205,6 +1207,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             if (clockMode()) heroLayer.invalidate();
         }
 
+        // The Refresh button spins while its fetches run: at least one turn, at most 30 s.
+        boolean spinning = spinSince != 0 && (up - spinSince < 1000 || up - spinSince < 30_000 && (data.busy() || recs.busy()));
+        if (spinSince != 0) status.invalidate();   // one more frame after the last turn: the icon comes to rest upright
+        if (!spinning) spinSince = 0;
+        statusMoving |= spinning;
         // Busy: something is moving, or the sheet or the drawer is open.
         boolean busy = tilesMoving || statusMoving || heroMoving || drawerItemsMoving || gridMoving || drawerMoving
                 || menuMoving || sheetMoving || toastFading || heroFading || bgFading || nightMoving || tintMoving || sheetOpen
@@ -3645,6 +3652,13 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             r = tileRects[shelfIndex];
         }
         click.open();
+        if (it.kind == HomeApps.REFRESH) {
+            data.refreshAll();
+            recs.refreshNow();
+            spinSince = SystemClock.uptimeMillis();
+            wake();
+            return;
+        }
         if (it.kind == HomeApps.ALL_APPS) {
             openSheet();
             return;
@@ -5880,7 +5894,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 fill.setShader(null);
                 fill.setColor(blend(0xD9141A26, 0xFFFFFFFF, f));
                 c.drawRect(cell, fill);
-                Symbols.draw(getContext(), c, it.symbol, cell.centerX(), cell.centerY(), 27 * k * s, blend(0xF2FFFFFF, L_INK, f));
+                drawButtonSymbol(c, it, 27 * k * s, blend(0xF2FFFFFF, L_INK, f));
                 if (f > 0.01f) {
                     String label = it.label;
                     lTip.setAlpha(Math.round(255 * f));
@@ -5899,8 +5913,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 fill.setColor(Ui.alpha(0xFFFFFFFF, f));
                 c.drawCircle(cell.centerX(), cell.centerY(), rad, fill);
             }
-            Symbols.draw(getContext(), c, it.symbol, cell.centerX(), cell.centerY(), 27 * k * s,
-                    blend(tone(L_INK, 0xEBFFFFFF), L_INK, f));
+            drawButtonSymbol(c, it, 27 * k * s, blend(tone(L_INK, 0xEBFFFFFF), L_INK, f));
             if (f > 0.01f) {
                 String label = it.label;
                 float half = lTip.measureText(label) / 2;
@@ -5914,6 +5927,17 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         float tw = lQuote.measureText(sleepText), size = lQuote.getTextSize();
         c.drawText(sleepText, right - tw, cy + Ui.halfCap(lQuote), lQuote);
         Symbols.draw(getContext(), c, "bedtime", right - tw - size * 0.9f, cy, size, lQuote.getColor());
+    }
+
+    /** A top button's icon in `cell`; Refresh's turns once a second while it fetches. */
+    private void drawButtonSymbol(Canvas c, HomeApps.Item it, float size, int color) {
+        boolean spin = it.kind == HomeApps.REFRESH && spinSince != 0;
+        if (spin) {
+            c.save();
+            c.rotate((SystemClock.uptimeMillis() - spinSince) % 1000 * 0.36f, cell.centerX(), cell.centerY());
+        }
+        Symbols.draw(getContext(), c, it.symbol, cell.centerX(), cell.centerY(), size, color);
+        if (spin) c.restore();
     }
 
     /** Wi-Fi/Ethernet, Bluetooth (when something is connected) and a USB drive, at the top left. */

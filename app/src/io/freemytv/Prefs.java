@@ -344,7 +344,7 @@ final class Prefs {
 
     /**
      * The round buttons at the top right, in order: "live", "inputs" and/or "settings". null until the user edits
-     * them (then HomeApps.TOP_DEFAULT applies); empty when they took all three off.
+     * them (then HomeApps.TOP_DEFAULT applies); empty when they took them all off.
      */
     static List<String> topButtons() {
         String v = sp().getString("topButtons", null);

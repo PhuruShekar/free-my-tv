@@ -397,6 +397,14 @@ final class Recs {
         return new File(new File(context.getCacheDir(), "recs"), p.backdrop.replace("/", ""));
     }
 
+    /** The Refresh button: the list fetched again now, a recent failure ignored. */
+    void refreshNow() {
+        listAt = failedAt = 0;
+        refreshIfStale();
+    }
+
+    boolean busy() { return fetching; }
+
     /** With a key: fetches the list if stale or the time of day (morning/afternoon/night) changed; then the details. */
     void refreshIfStale() {
         if (!hasKey(context) || fetching) return;
